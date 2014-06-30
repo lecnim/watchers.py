@@ -1,123 +1,139 @@
+"""
+watchers.py
+
+Monitors changes in the file system using watchers instances.
+
+TODO: Better docstrings
+TODO: Documentation
+
+"""
+
 import os
-import time
-import fnmatch
+import threading
 from stat import *
 from collections import namedtuple
 
-import threading
-
-import cProfile
-# File monitoring:
-
-# Watcher
-
-# dirs
-# files
-# files_created
-# files_modified
-# files_deleted
-
-# schedule
-# start
-# stop
-# recursive
+__version__ = '1.0.0b'
 
 
-# is_recursive
-#
-#     Determines whether subdirectories are watched for the path.
-#
-
-
-# ignored
-# excluded
-
-# on_created
-# file_patterns
-
-# The following example program will monitor the current directory
-# recursively for file system changes and simply log them to the console:
-
-# Below we present a simple example that monitors the current directory
-# recursively (which means, it will traverse any sub-directories) to detect
-# changes. Here is what we will do with the API:
-
+# Amount of time (in seconds) between running polling methods.
 CHECK_INTERVAL = 2
 
-class File:
 
+class BaseWatcher:
+    """Base watcher class."""
+
+    def __init__(self, check_interval=None):
+
+        self.is_alive = False
+        self.lock = threading.Lock()
+        self.check_thread = None
+
+        if check_interval is None:
+            self.check_interval = CHECK_INTERVAL
+        else:
+            self.check_interval = check_interval
+
+    def check(self):
+        """Override this."""
+        pass
+
+    def _thread_check(self):
+        """Check runs by Timer thread."""
+        self.check()
+        self._start_timer_thread()
+
+    def _start_timer_thread(self):
+        """Starts new Timer thread, it will run check after time interval."""
+
+        # Lock pauses stop() method.
+        # Check if watcher is alive because stop() can change it during
+        # executing this method.
+        with self.lock:
+            if self.is_alive:
+                self.check_thread = threading.Timer(self.check_interval,
+                                                    self._thread_check)
+                self.check_thread.name = repr(self)
+                self.check_thread.daemon = True
+                self.check_thread.start()
+
+    def start(self):
+        """Starts watching. Returns False if the watcher is already started."""
+
+        if self.is_alive:
+            return False
+
+        self.is_alive = True
+        self._thread_check()
+        return True
+
+    def stop(self):
+        """Stops watching. Returns False if the watcher is already stopped."""
+
+        if self.is_alive:
+
+            # Lock prevents starting new Timer threads.
+            with self.lock:
+                self.is_alive = False
+                self.check_thread.cancel()
+
+            # Timer thread canceled, wait for join it.
+            if threading.current_thread() != self.check_thread:
+                self.check_thread.join()
+                self.check_thread = None
+                return True
+
+        # Watcher already stopped.
+        else:
+            return False
+
+
+# Watchers.
+
+class Item:
+    """Represents a file or a directory."""
 
     def __init__(self, path):
 
         self.path = path
+        self.stat = os.stat(path)
 
-
-        stats = os.stat(path)
-
-        if S_ISDIR(stats.st_mode):
+        if S_ISDIR(self.stat.st_mode):
             self.is_file = False
         else:
             self.is_file = True
 
-        if self.is_file:
-            self.m_time = stats.st_mtime_ns
-            self.size = stats.st_size
-
-        # Permissions:
-
-        self.c_time = stats.st_ctime_ns
-        self.uid = stats.st_uid
-        self.gid = stats.st_gid
-        self.mode = stats.st_mode
-
-
     def is_modified(self):
+        """Returns True if a file/directory was modified."""
 
-        stats = os.stat(self.path)
+        stat = os.stat(self.path)
 
         if not self.is_file:
-
-            if self.mode != stats.st_mode \
-               or self.uid != stats.st_uid \
-               or self.gid != stats.st_gid:
-
-                self.c_time = stats.st_ctime_ns
-                self.mode = stats.st_mode
-                self.uid = stats.st_uid
-                self.gid = stats.st_gid
+            # st_mode: File mode (permissions)
+            # st_uid: Owner id.
+            # st_gid: Group id.
+            a = self.stat.st_mode, self.stat.st_uid, self.stat.st_gid
+            b = stat.st_mode, stat.st_uid, stat.st_gid
+            if a != b:
+                self.stat = stat
                 return True
             return False
 
-        if self.m_time != stats.st_mtime_ns \
-           or self.size != stats.st_size \
-           or self.mode != stats.st_mode \
-           or self.uid != stats.st_uid \
-           or self.gid != stats.st_gid:
-
-            self.m_time = stats.st_mtime_ns
-            self.mode = stats.st_mode
-            self.size = stats.st_size
-            self.gid = stats.st_gid
-            self.uid = stats.st_uid
-
+        # Check if file is modified.
+        a = self.stat.st_mtime, self.stat.st_size, self.stat.st_mode, \
+            self.stat.st_uid, self.stat.st_gid
+        b = stat.st_mtime, stat.st_size, stat.st_mode, stat.st_uid, stat.st_gid
+        if a != b:
+            self.stat = stat
             return True
         return False
 
-#
-#
-# class BasicWatcher:
-#
-#     def __init__(self, path, recursive=False, filter=None):
 
-class Watcher:
-    """Used by FileMonitor. Observe given path and runs function when
-    something was changed.
+class Watcher(BaseWatcher):
+    """Watcher with events."""
 
-    Properties:
-
-    """
-
-    def __init__(self, path, recursive=False, filter=None):
+    def __init__(self, path, recursive=False, filter=None, check_interval=None):
+        super().__init__(check_interval)
 
         # Path must be always absolute!
         self.path = os.path.abspath(path)
@@ -127,51 +143,40 @@ class Watcher:
         self.filter = filter
         self._events = {}
 
-        # List of watched files, key is file path, value is modification time.
+        # List of watched files, key is file path, value is Item instance.
         self.watched_paths = {}
 
+        for path in self._walk():
+            self.watched_paths[path] = Item(path)
+
+    def __repr__(self):
+        args = self.__class__.__name__, self.path, self.is_recursive
+        return "{}(path={!r}, recursive={!r})".format(*args)
+
+    def _walk(self):
+        """Yields watched paths (already filtered)."""
 
         for path, dirs, files in os.walk(self.path):
             for i in dirs + files:
-                self._watch_path(os.path.join(path, i))
+                p = os.path.join(path, i)
+                if self.filter and not self.filter(p):
+                    continue
+                yield p
             if not self.is_recursive:
                 break
 
-        # print(self.watched_paths.keys())
-
-
-    def _watch_path(self, path):
-
-        if self.filter and not self.filter(path):
-            return False
-
-        # Save file/dir modification time.
-        self.watched_paths[path] = File(path)
-        return True
-    #
-    #
-    # def run_function(self):
-    #     """Runs stored function."""
-    #     return self.target(*self.args, **self.kwargs)
-
     def check(self):
-        """Checks if files were modified. If modified => runs function."""
+        """Detects changes in a file system. Returns True if something
+        changed."""
 
         result = False
         stack = {}
 
-        for path, dirs, files in os.walk(self.path):
-            for i in dirs + files:
+        for path in self._walk():
+            if self._path_changed(path, stack):
+                result = True
 
-                if self.filter and not self.filter(os.path.join(path, i)):
-                    continue
-
-
-                if self._path_changed(os.path.join(path, i), stack):
-                    result = True
-            if not self.is_recursive:
-                break
-
+        # Deleted paths.
         if self.watched_paths:
             for path in self.watched_paths.values():
                 self.on_deleted(path)
@@ -181,11 +186,7 @@ class Watcher:
         return result
 
     def _path_changed(self, path, stack):
-        """Checks if path was modified, or created.
-
-        Returns:
-            True if path was modified or now created, False if not.
-        """
+        """Checks if a path was modified or created."""
 
         # File exists and could be modified.
         if path in self.watched_paths:
@@ -200,11 +201,10 @@ class Watcher:
                 return False
 
         # Path was created.
-        x = File(path)
+        x = Item(path)
         stack[path] = x
         self.on_created(x)
         return True
-
 
     # Events.
 
@@ -216,7 +216,6 @@ class Watcher:
     def _add_event(self, name, callable, args, kwargs):
         Event = namedtuple('Event', 'callable args kwargs')
         self._events[name] = Event(callable, args, kwargs)
-
 
     def on_created(self, item, *args, **kwargs):
         if callable(item):
@@ -237,72 +236,70 @@ class Watcher:
             self.run_event('on_deleted')
 
 
+class SimpleWatcher(BaseWatcher):
+    """A Watcher that runs callable when file system changed."""
 
-class SimpleWatcher:
-
-    def __init__(self, path, target, args=(), kwargs={}, recursive=False,
-                 filter=None):
+    def __init__(self, path, target, args=(), kwargs=None, recursive=False,
+                 filter=None, check_interval=None):
+        super().__init__(check_interval)
 
         self.path = os.path.abspath(path)
         self.is_recursive = recursive
         self.filter = filter
 
-        self.check_thread = None
-        self.check_interval = CHECK_INTERVAL
-
         self.target = target
         self.args = args
-        self.kwargs = kwargs
+        self.kwargs = {} if not kwargs else kwargs
 
         self.snapshot = self._get_snapshot()
 
     def __repr__(self):
-        return "SimpleWatcher(path={!r})".format(self.path)
-
-    @property
-    def is_stopped(self):
-        return True if self.check_thread is None else False
+        args = self.__class__.__name__, self.path, self.is_recursive
+        return "{}(path={!r}, recursive={!r})".format(*args)
 
     def _get_snapshot(self):
+        """Returns set with all paths in self.path."""
 
         snapshot = set()
 
         for path, dirs, files in os.walk(self.path):
-            for i in dirs + files:
 
+            for i in dirs:
                 if self.filter and not self.filter(os.path.join(path, i)):
                     continue
 
                 p = os.path.join(path, i)
                 stats = os.stat(p)
+                snapshot.add((
+                    p,
+                    stats.st_mode,
+                    stats.st_uid,
+                    stats.st_gid
+                ))
 
-                # Path points to directory.
+            for i in files:
+                if self.filter and not self.filter(os.path.join(path, i)):
+                    continue
 
-                if S_ISDIR(stats.st_mode):
-                    snapshot.add((
-                        p,
-                        stats.st_mode,
-                        stats.st_uid,
-                        stats.st_gid
-                    ))
-
-                # Path points to file.
-                else:
-                    snapshot.add((
-                        p,
-                        stats.st_mode,
-                        stats.st_uid,
-                        stats.st_gid,
-                        stats.st_mtime_ns,
-                        stats.st_size
-                    ))
+                p = os.path.join(path, i)
+                stats = os.stat(p)
+                snapshot.add((
+                    p,
+                    stats.st_mode,
+                    stats.st_uid,
+                    stats.st_gid,
+                    stats.st_mtime_ns,
+                    stats.st_size
+                ))
 
             if not self.is_recursive:
                 break
-
         return snapshot
 
     def check(self):
+        """Detects changes in a file system. Returns True if something
+        changed."""
+
         s = self._get_snapshot()
         if self.snapshot != s:
             self.target(*self.args, **self.kwargs)
@@ -310,99 +307,53 @@ class SimpleWatcher:
             return True
         return False
 
-    def start(self):
 
-        if not self.is_stopped:
-            return False
+class Manager(BaseWatcher):
+    """Manager"""
 
-        self.check()
+    def __init__(self, check_interval=None):
+        super().__init__(check_interval)
 
-        self.check_thread = threading.Timer(self.check_interval, self.check)
-        self.check_thread.name = repr(self)
-        self.check_thread.daemon = True
-        self.check_thread.start()
+        self.watchers = set()
+        self.watchers_lock = threading.Lock()
+
+    def __repr__(self):
+        args = self.__class__.__name__, self.check_interval
+        return "{}(check_interval={!r})".format(*args)
+
+    def add(self, watcher):
+        """Adds a watcher to the manager."""
+
+        if not watcher in self.watchers:
+
+            # Adding to set is thread-safe?
+            with self.lock:
+                self.watchers.add(watcher)
+            return True
+        return False
+
+    def remove(self, watcher):
+        """Removes a watcher from the manager. Raises KeyError if a watcher is
+        not in the manager watchers."""
+
+        # Removing from set is thread-safe?
+        with self.watchers_lock:
+            try:
+                self.watchers.remove(watcher)
+            except KeyError:
+                raise KeyError('Manager.remove(x): watcher x not in manager')
         return True
 
-    def stop(self):
-
-        if self.check_thread:
-            self.check_thread.cancel()
-
-            while self.check_thread.is_alive():
-                pass
-
-            self.check_thread = None
-            return True
-        return False
-
-
-
-
-class FileMonitor:
-    """Watch for changes in files.
-
-    Use watch() method to watch path (and everything inside it) and run given
-    function when something changes.
-
-    """
-
-    def __init__(self):
-
-        # Next check is run after this amount of time.
-        self.interval = config.watch_interval
-
-        self.observers = []
-        self._enabled = False
-
-        self.lock = threading.Lock()
-        self.monitor = None             # Thread used for running self.check()
-
-    @property
-    def is_enabled(self):
-        if (self.monitor and self.monitor.is_alive()) or self._enabled:
-            return True
-        return False
-
-    def watch(self, path, exclude, function, *args, **kwargs):
-        """Watches given path and run function when something changed."""
-
-        observer = Watcher(path, function, args, kwargs, ignored_paths=exclude)
-        self.observers.append(observer)
-        return observer
-
-    def _check(self):
-        """Checks each observer. Runs by self.monitor thread."""
-
-        with self.lock:
-            if self._enabled:
-                for i in self.observers[:]:
-                    if i.check():
-                        i.run_function()
-
-                self.monitor = threading.Timer(self.interval, self._check)
-                self.monitor.name = 'Watcher: ' + str(len(self.observers))
-                self.monitor.daemon = True
-                self.monitor.start()
-
-    def disable(self):
-        """Stops watching. Important: it do not clear observers, you can always
-        use enable() to start watching again."""
-
-        if self.monitor:
-            self.monitor.cancel()
-        self._enabled = False
-
-    def enable(self):
-        """Starts watching using observers."""
-
-        self._enabled = True
-        self._check()
-
     def clear(self):
-        """Removes all observers."""
+        """Removes all watchers."""
 
-        self.observers = []
-        if self.monitor:
-            self.monitor.cancel()
+        with self.watchers_lock:
+            self.watchers = set()
 
+    def check(self):
+        """Checks each watcher for changes in file system."""
 
+        # With this lock threads cannot modify self.watcher.
+        with self.watchers_lock:
+            for i in self.watchers:
+                i.check()

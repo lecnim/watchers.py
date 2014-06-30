@@ -11,34 +11,37 @@ import timeit
 import time
 import platform
 
-from watchers import Watcher, SimpleWatcher
+import watchers
+from watchers import Watcher, SimpleWatcher, Manager
 
+# For faster testing.
+watchers.CHECK_INTERVAL = 0.25
 
 # Shortcuts.
 
 def create_file(*path, data='hello world!'):
-    """Creates new file with given data."""
+    """Creates a new file with a given data."""
     with open(os.path.join(*path), 'w') as file:
         file.write(data)
 
 
 def create_dir(*path):
-    """Creates new directory."""
+    """Creates a new directory."""
     os.mkdir(os.path.join(*path))
 
 
 def delete_file(*path):
-    """Removes file."""
+    """Removes a file."""
     os.remove(os.path.join(*path))
 
 
 def delete_dir(*path):
-    """Removes directory."""
+    """Removes a directory."""
     shutil.rmtree(os.path.join(*path))
 
 
 def modify_file(*path):
-    """Modifies file data - appends 'hello'."""
+    """Modifies a file data - appends 'hello'."""
     with open(os.path.join(*path), 'a') as file:
         file.write('hello')
 
@@ -49,7 +52,7 @@ def absolute_paths(*paths):
 
 
 def create_test_files():
-    """Returns path to temporary directory with example files used during
+    """Returns a path to a temporary directory with example files used during
     tests."""
 
     path = tempfile.mkdtemp()
@@ -79,7 +82,7 @@ def create_test_files():
 
 
 class BaseTest(unittest.TestCase):
-    """Base test class."""
+    """A base test class."""
 
     class_ = None
     kwargs = {}
@@ -97,6 +100,9 @@ class BaseTest(unittest.TestCase):
         # Go to previous working directory and clear temp files.
         os.chdir(self.cwd)
         shutil.rmtree(self.temp_path)
+
+    def test_repr(self):
+        print(self.class_(**self.kwargs))
 
     def test(self):
         """Should detects changes in a file system."""
@@ -354,6 +360,12 @@ class BaseTest(unittest.TestCase):
         modify_file('x', 'y', 'foo.txt')
         self.assertFalse(x.check())
 
+    def test_check_interval(self):
+        """Should correctly set a custom check interval."""
+
+        x = self.class_(check_interval=4, **self.kwargs)
+        self.assertEqual(4, x.check_interval)
+
 
 class TestWatcher(BaseTest):
     """A Watcher"""
@@ -364,7 +376,7 @@ class TestWatcher(BaseTest):
     }
 
     def test_override_events(self):
-        """Should run overridden event methods with correct arguments."""
+        """Should run an overridden event methods with correct arguments."""
 
         created = None
         modified = None
@@ -410,7 +422,7 @@ class TestWatcher(BaseTest):
         self.assertEqual(deleted.path, os.path.abspath('new.file'))
 
     def test_on_file_created(self):
-        """Should run event if file created."""
+        """Should run an event if a file created."""
 
         i = 0
         def test(a, b):
@@ -424,7 +436,7 @@ class TestWatcher(BaseTest):
         self.assertEqual(2, i)
 
     def test_on_file_deleted(self):
-        """Should run event if file deleted."""
+        """Should run an event if a file deleted."""
 
         i = 0
         def test(a, b):
@@ -438,7 +450,7 @@ class TestWatcher(BaseTest):
         self.assertEqual(2, i)
 
     def test_on_file_modified(self):
-        """Should run event if file modified."""
+        """Should run an event if a file modified."""
 
         i = 0
         def test(a, b):
@@ -452,7 +464,7 @@ class TestWatcher(BaseTest):
         self.assertEqual(2, i)
 
     def test_on_dir_created(self):
-        """Should run event if directory created."""
+        """Should run an event if a directory created."""
 
         i = 0
         def test(a, b):
@@ -466,7 +478,7 @@ class TestWatcher(BaseTest):
         self.assertEqual(2, i)
 
     def test_on_dir_deleted(self):
-        """Should run event if directory deleted."""
+        """Should run an event if a directory deleted."""
 
         i = 0
         def test(a, b):
@@ -480,7 +492,7 @@ class TestWatcher(BaseTest):
         self.assertEqual(2, i)
 
     def test_on_dir_modified(self):
-        """Should run event if directory modified."""
+        """Should run an event if a directory modified."""
 
         i = 0
         def test(a, b):
@@ -493,6 +505,41 @@ class TestWatcher(BaseTest):
         x.check()
         self.assertEqual(2, i)
 
+    def test_thread(self):
+        """Can start a new thread to check a file system changes."""
+
+        i = False
+        def function():
+            nonlocal i
+            i = True
+
+        x = self.class_('.')
+        x.on_created(function)
+        # Watcher started correctly.
+        self.assertTrue(x.start())
+        # Watcher already started.
+        self.assertFalse(x.start())
+
+        create_file('new.file')
+
+        # Wait for check!
+        while not i:
+            pass
+
+        i = False
+        create_file('new.file2')
+
+        # Wait for another check!
+        while not i:
+            pass
+
+        self.assertTrue(x.is_alive)
+        # Watcher stopped correctly.
+        self.assertTrue(x.stop())
+        self.assertFalse(x.is_alive)
+        # Watcher already stopped.
+        self.assertFalse(x.stop())
+
 
 class TestSimpleWatcher(BaseTest):
     """A SimpleWatcher"""
@@ -504,7 +551,7 @@ class TestSimpleWatcher(BaseTest):
     }
 
     def test_callable(self):
-        """should run callable when file system changed."""
+        """Should run a callable when a file system changed."""
 
         i = 0
         def function(a, b):
@@ -517,6 +564,7 @@ class TestSimpleWatcher(BaseTest):
         self.assertEqual(2, i)
 
     def test_thread(self):
+        """Can start a new thread to check a file system changes."""
 
         i = False
         def function():
@@ -534,12 +582,115 @@ class TestSimpleWatcher(BaseTest):
         while not i:
             pass
 
-        self.assertFalse(x.is_stopped)
+        i = False
+        create_file('new.file2')
+
+        # Wait for another check!
+        while not i:
+            pass
+
+        self.assertTrue(x.is_alive)
         # Watcher stopped correctly.
         self.assertTrue(x.stop())
-        self.assertTrue(x.is_stopped)
+        self.assertFalse(x.is_alive)
         # Watcher already stopped.
         self.assertFalse(x.stop())
+
+
+class TestManager(unittest.TestCase):
+    """A Manager"""
+
+    def setUp(self):
+
+        # Create temporary directory with example files and change current
+        # working directory to it.
+        self.cwd = os.getcwd()
+        self.temp_path = create_test_files()
+        os.chdir(self.temp_path)
+
+    def tearDown(self):
+
+        # Go to previous working directory and clear temp files.
+        os.chdir(self.cwd)
+        shutil.rmtree(self.temp_path)
+
+    def test_repr(self):
+        print(Manager())
+
+    def test_add(self):
+        """Can add watchers."""
+
+        m = Manager()
+        a = Watcher('.')
+
+        self.assertTrue(m.add(a))
+        self.assertIn(a, m.watchers)
+
+        # Adding watchers to started manager.
+        m.start()
+        b = Watcher('.')
+        m.add(b)
+        self.assertIn(a, m.watchers)
+        m.stop()
+
+    def test_remove(self):
+        """Can remove watchers."""
+
+        m = Manager()
+        a = Watcher('.')
+        b = Watcher('.')
+        m.add(a)
+        m.add(b)
+
+        self.assertTrue(m.remove(a))
+        self.assertNotIn(a, m.watchers)
+
+        # Removing watcher from started manager.
+
+        m.start()
+        m.remove(b)
+        self.assertNotIn(b, m.watchers)
+        m.stop()
+
+        # Exceptions.
+
+        self.assertRaises(KeyError, m.remove, Watcher('.'))
+
+    def test_clear(self):
+        """Can remove all watchers."""
+
+        m = Manager()
+        a = Watcher('.')
+        m.add(a)
+        m.clear()
+
+        self.assertFalse(m.watchers)
+
+    def test_thread(self):
+        """Can start a new thread to check each watcher."""
+
+        i = False
+        def function():
+            nonlocal i
+            i = True
+
+        m = Manager()
+
+        a = Watcher('.')
+        a.on_created(function)
+        m.add(a)
+
+        self.assertTrue(m.start())
+        for k in range(10):
+            m.add(Watcher('.'))
+        create_file('new.file')
+
+        while not i:
+            pass
+
+        m.stop()
+        self.assertFalse(m.is_alive)
+
 
 # Prevent testing base class.
 del BaseTest
@@ -547,7 +698,7 @@ del BaseTest
 
 # Benchmark
 
-def benchmark(times=1000):
+def benchmark(times=10000):
     """Benchmarks each watcher."""
 
     # Prepare temp directory with example files.
@@ -559,13 +710,18 @@ def benchmark(times=1000):
     print(msg)
 
     x = timeit.timeit('Watcher(".", recursive=True).check()',
-                      setup='from basicwatcher import Watcher', number=times)
-    print('Watcher: \t\t{} s.'.format(round(x, 4)))
+                      setup='from watchers import Watcher', number=times)
+
+    sample = round(x / (8 * times) * 1000, 3)
+
+    print('Watcher: \t\t{} s. one file: {} ms.'.format(round(x, 3), sample))
 
     x = timeit.timeit(
         'SimpleWatcher(".", target=lambda: 1, recursive=True).check()',
-        setup='from basicwatcher import SimpleWatcher', number=times)
-    print('SimpleWatcher: \t{} s.'.format(round(x, 4)))
+        setup='from watchers import SimpleWatcher', number=times)
+
+    sample = round(x / (8 * times) * 1000, 3)
+    print('SimpleWatcher: \t{} s. one file: {} ms.'.format(round(x, 3), sample))
 
     # Cleaning!
     shutil.rmtree(path)
