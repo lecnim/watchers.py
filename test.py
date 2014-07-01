@@ -367,6 +367,11 @@ class BaseTest(unittest.TestCase):
         x = self.class_(check_interval=4, **self.kwargs)
         self.assertEqual(4, x.check_interval)
 
+    def test_is_alive(self):
+
+        x = self.class_(**self.kwargs)
+        self.assertFalse(x.is_alive)
+
 
 class TestWatcher(BaseTest):
     """A Watcher"""

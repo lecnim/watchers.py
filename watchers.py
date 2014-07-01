@@ -36,7 +36,8 @@ class BaseWatcher:
 
     @property
     def is_alive(self):
-        if self._is_alive or self.check_thread.is_alive():
+        if self._is_alive \
+           or (self.check_thread and self.check_thread.is_alive()):
             return True
         return False
 
