@@ -10,6 +10,7 @@ import tempfile
 import timeit
 import time
 import platform
+import threading
 
 import watchers
 from watchers import Watcher, SimpleWatcher, Manager
@@ -591,10 +592,50 @@ class TestSimpleWatcher(BaseTest):
 
         self.assertTrue(x.is_alive)
         # Watcher stopped correctly.
+        thread = x.check_thread
         self.assertTrue(x.stop())
+        self.assertFalse(thread.is_alive())
         self.assertFalse(x.is_alive)
         # Watcher already stopped.
         self.assertFalse(x.stop())
+
+    def test_stop_in_check(self):
+        """Can stop watcher from called function."""
+
+        def function(x):
+            # In this situation stop() cannot wait unit check thread will
+            # be dead, because stop() is run by the check thread!
+            x.stop()
+
+        x = self.class_('.', function)
+        x.args = (x,)
+        create_file('new.file')
+        x.start()
+
+        while x.is_alive:
+            pass
+
+        self.assertFalse(x.is_alive)
+
+    def test_is_alive(self):
+        """Should set a is_alive attribute to False only if all check threads are dead"""
+
+        thread = None
+        def function(x):
+            nonlocal thread
+            thread = x.check_thread
+            x.stop()
+            time.sleep(2)
+
+        x = self.class_('.', function)
+        x.args = (x,)
+        x.start()
+        create_file('new.file')
+
+        while x.is_alive:
+            pass
+
+        self.assertFalse(thread.is_alive())
 
 
 class TestManager(unittest.TestCase):
@@ -690,6 +731,21 @@ class TestManager(unittest.TestCase):
 
         m.stop()
         self.assertFalse(m.is_alive)
+
+    def test_change_watchers_in_check(self):
+        """Should handle changing watchers set during check() method."""
+
+        m = Manager()
+
+        def function():
+            m.add(Watcher('.'))
+
+        x = SimpleWatcher('.', function)
+        m.add(x)
+        create_file('new.file')
+        m.start()
+
+        self.assertTrue(m.stop())
 
 
 # Prevent testing base class.

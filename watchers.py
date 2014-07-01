@@ -13,7 +13,7 @@ import threading
 from stat import *
 from collections import namedtuple
 
-__version__ = '1.0.0b'
+__version__ = '1.0.1b'
 
 
 # Amount of time (in seconds) between running polling methods.
@@ -25,7 +25,7 @@ class BaseWatcher:
 
     def __init__(self, check_interval=None):
 
-        self.is_alive = False
+        self._is_alive = False
         self.lock = threading.Lock()
         self.check_thread = None
 
@@ -34,24 +34,35 @@ class BaseWatcher:
         else:
             self.check_interval = check_interval
 
+    @property
+    def is_alive(self):
+        if self._is_alive or self.check_thread.is_alive():
+            return True
+        return False
+
     def check(self):
         """Override this."""
         pass
 
     def _thread_check(self):
         """Check runs by Timer thread."""
+
         self.check()
         self._start_timer_thread()
 
-    def _start_timer_thread(self):
+    def _start_timer_thread(self, check_interval=None):
         """Starts new Timer thread, it will run check after time interval."""
 
         # Lock pauses stop() method.
         # Check if watcher is alive because stop() can change it during
         # executing this method.
         with self.lock:
-            if self.is_alive:
-                self.check_thread = threading.Timer(self.check_interval,
+            if self._is_alive:
+
+                if check_interval is None:
+                    check_interval = self.check_interval
+
+                self.check_thread = threading.Timer(check_interval,
                                                     self._thread_check)
                 self.check_thread.name = repr(self)
                 self.check_thread.daemon = True
@@ -60,28 +71,27 @@ class BaseWatcher:
     def start(self):
         """Starts watching. Returns False if the watcher is already started."""
 
-        if self.is_alive:
+        if self._is_alive:
             return False
 
-        self.is_alive = True
-        self._thread_check()
+        self._is_alive = True
+        self._start_timer_thread(0)
         return True
 
     def stop(self):
         """Stops watching. Returns False if the watcher is already stopped."""
 
-        if self.is_alive:
+        if self._is_alive:
 
             # Lock prevents starting new Timer threads.
             with self.lock:
-                self.is_alive = False
+                self._is_alive = False
                 self.check_thread.cancel()
 
             # Timer thread canceled, wait for join it.
             if threading.current_thread() != self.check_thread:
                 self.check_thread.join()
-                self.check_thread = None
-                return True
+            return True
 
         # Watcher already stopped.
         else:
@@ -327,7 +337,7 @@ class Manager(BaseWatcher):
         if not watcher in self.watchers:
 
             # Adding to set is thread-safe?
-            with self.lock:
+            with self.watchers_lock:
                 self.watchers.add(watcher)
             return True
         return False
@@ -353,7 +363,9 @@ class Manager(BaseWatcher):
     def check(self):
         """Checks each watcher for changes in file system."""
 
-        # With this lock threads cannot modify self.watcher.
         with self.watchers_lock:
-            for i in self.watchers:
-                i.check()
+            x = self.watchers.copy()
+
+        # With this lock threads cannot modify self.watcher.
+        for i in x:
+            i.check()
