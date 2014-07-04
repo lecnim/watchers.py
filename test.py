@@ -3,6 +3,7 @@ Testing!
 """
 
 import os
+import os.path
 import sys
 import unittest
 import shutil
@@ -368,9 +369,36 @@ class BaseTest(unittest.TestCase):
         self.assertEqual(4, x.check_interval)
 
     def test_is_alive(self):
+        """Should correctly set is_alive property."""
 
         x = self.class_(**self.kwargs)
         self.assertFalse(x.is_alive)
+
+    def test_delete_during_check(self):
+        """Should skip files deleted by a other process during check."""
+
+        files = (self.temp_path, ['a.txt', 'b.txt'], [])
+
+        def walk(*args, **kwargs):
+            return [files]
+
+        original_walk = os.walk
+        os.walk = walk
+
+        create_file('a.txt')
+        create_file('b.txt')
+        x = self.class_(**self.kwargs)
+        x.check()
+        delete_file('a.txt')
+
+        try:
+            self.assertTrue(x.check())
+            files[1].remove('a.txt')
+            self.assertFalse(x.check())
+        except:
+            raise
+        finally:
+            os.walk = original_walk
 
 
 class TestWatcher(BaseTest):

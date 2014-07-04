@@ -9,6 +9,7 @@ TODO: Documentation
 """
 
 import os
+import sys
 import threading
 from stat import *
 from collections import namedtuple
@@ -106,18 +107,27 @@ class Item:
 
     def __init__(self, path):
 
+        # Path can be deleted during creating Item instance.
         self.path = path
-        self.stat = os.stat(path)
+        try:
+            self.stat = os.stat(path)
+        except IOError:
+            self.path = None
 
-        if S_ISDIR(self.stat.st_mode):
-            self.is_file = False
-        else:
-            self.is_file = True
+        if self.path:
+            if S_ISDIR(self.stat.st_mode):
+                self.is_file = False
+            else:
+                self.is_file = True
 
     def is_modified(self):
         """Returns True if a file/directory was modified."""
 
-        stat = os.stat(self.path)
+        # Path can be deleted before this method.
+        try:
+            stat = os.stat(self.path)
+        except IOError:
+            return True
 
         if not self.is_file:
             # st_mode: File mode (permissions)
@@ -213,8 +223,9 @@ class Watcher(BaseWatcher):
 
         # Path was created.
         x = Item(path)
-        stack[path] = x
-        self.on_created(x)
+        if x.path:
+            stack[path] = x
+            self.on_created(x)
         return True
 
     # Events.
@@ -280,28 +291,36 @@ class SimpleWatcher(BaseWatcher):
                     continue
 
                 p = os.path.join(path, i)
-                stats = os.stat(p)
-                snapshot.add((
-                    p,
-                    stats.st_mode,
-                    stats.st_uid,
-                    stats.st_gid
-                ))
+                try:
+                    stats = os.stat(p)
+                except IOError:
+                    pass
+                else:
+                    snapshot.add((
+                        p,
+                        stats.st_mode,
+                        stats.st_uid,
+                        stats.st_gid
+                    ))
 
             for i in files:
                 if self.filter and not self.filter(os.path.join(path, i)):
                     continue
 
                 p = os.path.join(path, i)
-                stats = os.stat(p)
-                snapshot.add((
-                    p,
-                    stats.st_mode,
-                    stats.st_uid,
-                    stats.st_gid,
-                    stats.st_mtime_ns,
-                    stats.st_size
-                ))
+                try:
+                    stats = os.stat(p)
+                except IOError:
+                    pass
+                else:
+                    snapshot.add((
+                        p,
+                        stats.st_mode,
+                        stats.st_uid,
+                        stats.st_gid,
+                        stats.st_mtime_ns,
+                        stats.st_size
+                    ))
 
             if not self.is_recursive:
                 break
