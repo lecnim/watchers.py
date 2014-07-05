@@ -11,7 +11,6 @@ import tempfile
 import timeit
 import time
 import platform
-import threading
 
 import watchers
 from watchers import Watcher, SimpleWatcher, Manager
@@ -803,7 +802,7 @@ def benchmark(times=10000):
 
     sample = round(x / (8 * times) * 1000, 3)
 
-    print('Watcher: \t\t{} s. one file: {} ms.'.format(round(x, 3), sample))
+    print('Watcher: \t{} s. one file: {} ms.'.format(round(x, 3), sample))
 
     x = timeit.timeit(
         'SimpleWatcher(".", target=lambda: 1, recursive=True).check()',
@@ -818,5 +817,8 @@ def benchmark(times=10000):
 
 
 if __name__ == "__main__":
+
     if '-b' in sys.argv or '--benchmark' in sys.argv:
         benchmark()
+    else:
+        unittest.main()

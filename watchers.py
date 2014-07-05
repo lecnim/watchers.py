@@ -9,13 +9,19 @@ TODO: Documentation
 """
 
 import os
+import sys
 import threading
 from stat import *
 from collections import namedtuple
 
 __version__ = '1.0.1b'
 
+# Minimum python 3.2
+if sys.hexversion < 0x030200F0:
+    raise ImportError('Python < 3.2 not supported!')
 
+# Python 3.2 do not support ns in os.stats!
+PYTHON32 = True if sys.hexversion < 0x030300F0 else False
 # Amount of time (in seconds) between running polling methods.
 CHECK_INTERVAL = 2
 
@@ -110,7 +116,7 @@ class Item:
         self.path = path
         try:
             self.stat = os.stat(path)
-        except IOError:
+        except (IOError, OSError):
             self.path = None
 
         if self.path:
@@ -125,7 +131,7 @@ class Item:
         # Path can be deleted before this method.
         try:
             stat = os.stat(self.path)
-        except IOError:
+        except (IOError, OSError):
             return True
 
         if not self.is_file:
@@ -292,7 +298,7 @@ class SimpleWatcher(BaseWatcher):
                 p = os.path.join(path, i)
                 try:
                     stats = os.stat(p)
-                except IOError:
+                except (IOError, OSError):
                     pass
                 else:
                     snapshot.add((
@@ -309,7 +315,7 @@ class SimpleWatcher(BaseWatcher):
                 p = os.path.join(path, i)
                 try:
                     stats = os.stat(p)
-                except IOError:
+                except (IOError, OSError):
                     pass
                 else:
                     snapshot.add((
@@ -317,7 +323,7 @@ class SimpleWatcher(BaseWatcher):
                         stats.st_mode,
                         stats.st_uid,
                         stats.st_gid,
-                        stats.st_mtime_ns,
+                        stats.st_mtime if PYTHON32 else stats.st_mtime_ns,
                         stats.st_size
                     ))
 
