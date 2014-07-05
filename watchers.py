@@ -9,7 +9,6 @@ TODO: Documentation
 """
 
 import os
-import sys
 import threading
 from stat import *
 from collections import namedtuple
