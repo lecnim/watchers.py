@@ -16,7 +16,6 @@ import watchers
 from watchers import Watcher, SimpleWatcher, Manager
 
 # For faster testing.
-watchers.CHECK_INTERVAL = 0.25
 CHECK_INTERVAL = 0.25
 
 # Shortcuts.
@@ -693,28 +692,51 @@ class TestManager(unittest.TestCase):
     def test_repr(self):
         print(Manager())
 
+    def test_start_stop(self):
+        """Should start() all watchers and stop() all watchers."""
+
+        m = Manager()
+        a = Watcher(CHECK_INTERVAL, '.')
+        b = Watcher(CHECK_INTERVAL, '.')
+
+        self.assertFalse(a.is_alive)
+        self.assertFalse(b.is_alive)
+        m.add(a)
+        m.add(b)
+
+        m.start()
+        self.assertTrue(a.is_alive)
+        self.assertTrue(b.is_alive)
+        m.stop()
+        self.assertFalse(a.is_alive)
+        self.assertFalse(b.is_alive)
+
     def test_add(self):
         """Can add watchers."""
 
         m = Manager()
-        a = Watcher('.')
+        a = Watcher(CHECK_INTERVAL, '.')
 
         self.assertTrue(m.add(a))
         self.assertIn(a, m.watchers)
+        self.assertFalse(a.is_alive)
+
+        m.start()
+        self.assertTrue(a.is_alive)
 
         # Adding watchers to started manager.
-        m.start()
-        b = Watcher('.')
+        b = Watcher(CHECK_INTERVAL, '.')
         m.add(b)
         self.assertIn(a, m.watchers)
+        self.assertFalse(b.is_alive)
         m.stop()
 
     def test_remove(self):
         """Can remove watchers."""
 
         m = Manager()
-        a = Watcher('.')
-        b = Watcher('.')
+        a = Watcher(CHECK_INTERVAL, '.')
+        b = Watcher(CHECK_INTERVAL, '.')
         m.add(a)
         m.add(b)
 
@@ -730,13 +752,13 @@ class TestManager(unittest.TestCase):
 
         # Exceptions.
 
-        self.assertRaises(KeyError, m.remove, Watcher('.'))
+        self.assertRaises(KeyError, m.remove, Watcher(CHECK_INTERVAL, '.'))
 
     def test_clear(self):
         """Can remove all watchers."""
 
         m = Manager()
-        a = Watcher('.')
+        a = Watcher(CHECK_INTERVAL, '.')
         m.add(a)
         m.clear()
 
@@ -752,20 +774,20 @@ class TestManager(unittest.TestCase):
 
         m = Manager()
 
-        a = Watcher('.')
+        a = Watcher(CHECK_INTERVAL, '.')
         a.on_created(function)
         m.add(a)
 
-        self.assertTrue(m.start())
+        m.start()
         for k in range(10):
-            m.add(Watcher('.'))
+            m.add(Watcher(CHECK_INTERVAL, '.'))
         create_file('new.file')
 
         while not i:
             pass
 
         m.stop()
-        self.assertFalse(m.is_alive)
+        self.assertEqual([], [i for i in m.watchers if i.is_alive])
 
     def test_change_watchers_in_check(self):
         """Should handle changing watchers set during check() method."""
@@ -773,14 +795,13 @@ class TestManager(unittest.TestCase):
         m = Manager()
 
         def function():
-            m.add(Watcher('.'))
+            m.add(Watcher(CHECK_INTERVAL, '.'))
 
-        x = SimpleWatcher('.', function)
+        x = SimpleWatcher(CHECK_INTERVAL, '.', function)
         m.add(x)
         create_file('new.file')
         m.start()
-
-        self.assertTrue(m.stop())
+        m.stop()
 
 
 # Prevent testing base class.
@@ -800,7 +821,7 @@ def benchmark(times=10000):
     msg = 'Watching {} files in {} directories.'.format(8 * times, 2 * times)
     print(msg)
 
-    x = timeit.timeit('Watcher(".", recursive=True).check()',
+    x = timeit.timeit('Watcher(1, ".", recursive=True).check()',
                       setup='from watchers import Watcher', number=times)
 
     sample = round(x / (8 * times) * 1000, 3)
@@ -808,7 +829,7 @@ def benchmark(times=10000):
     print('Watcher: \t{} s. one file: {} ms.'.format(round(x, 3), sample))
 
     x = timeit.timeit(
-        'SimpleWatcher(".", target=lambda: 1, recursive=True).check()',
+        'SimpleWatcher(1, ".", target=lambda: 1, recursive=True).check()',
         setup='from watchers import SimpleWatcher', number=times)
 
     sample = round(x / (8 * times) * 1000, 3)

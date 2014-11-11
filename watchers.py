@@ -5,6 +5,7 @@ Monitors changes in the file system using watchers instances.
 
 TODO: Better docstrings
 TODO: Documentation
+TODO: Better benchmark function
 
 """
 
@@ -22,23 +23,18 @@ if sys.hexversion < 0x030200F0:
 
 # Python 3.2 do not support ns in os.stats!
 PYTHON32 = True if sys.hexversion < 0x030300F0 else False
-# Amount of time (in seconds) between running polling methods.
-CHECK_INTERVAL = 2
 
 
 class BaseWatcher:
     """Base watcher class."""
 
-    def __init__(self, check_interval=None):
+    def __init__(self, check_interval):
 
         self._is_alive = False
         self.lock = threading.Lock()
         self.check_thread = None
-
-        if check_interval is None:
-            self.check_interval = CHECK_INTERVAL
-        else:
-            self.check_interval = check_interval
+        # Amount of time (in seconds) between running polling methods.
+        self.check_interval = check_interval
 
     @property
     def is_alive(self):
@@ -343,18 +339,18 @@ class SimpleWatcher(BaseWatcher):
         return False
 
 
-class Manager(BaseWatcher):
+class Manager:
     """Manager"""
 
-    def __init__(self, check_interval=None):
-        super().__init__(check_interval)
+    def __init__(self):
 
         self.watchers = set()
         self.watchers_lock = threading.Lock()
 
     def __repr__(self):
-        args = self.__class__.__name__, self.check_interval
-        return "{}(check_interval={!r})".format(*args)
+        args = self.__class__.__name__, len(self.watchers)
+        return "{}(watchers={!r})".format(*args)
+
 
     def add(self, watcher):
         """Adds a watcher instance to this manager. Returns False if the manager
@@ -379,6 +375,22 @@ class Manager(BaseWatcher):
             except KeyError:
                 raise KeyError('Manager.remove(x): watcher x not in manager')
         return True
+
+    def start(self):
+        """Starts all watchers, skips already started ones."""
+
+        # with self.watchers_lock:
+        for i in self.watchers.copy():
+            if not i.is_alive:
+                i.start()
+
+    def stop(self):
+        """Stops all watchers."""
+
+        # with self.watchers_lock:
+        for i in self.watchers.copy():
+            if i.is_alive:
+                i.stop()
 
     def clear(self):
         """Removes all watchers instances from this manager."""
