@@ -45,27 +45,29 @@ from watchers import SimpleWatcher
 
 def foo():
     print('Something has changed in directory!')
-x = SimpleWatcher('path/to/dir', foo)
-# Use start() to start watching changes.
+# Watch a 'path/to/dir' location in 2 seconds intervals and run a foo() when
+# change is detected.
+x = SimpleWatcher(2, 'path/to/dir', foo)
+# Use start() to start watching.
 x.start()
 
 # You can stop Watcher using stop():
 x.stop()
-# Or use is_alive property if you want to know if watcher is running:
+# Or use is_alive property if you want to know if watcher is still running:
 if x.is_alive:
-    print('HE IS ALIVE!')
+    print('HE IS ALIVE AND HE IS WATCHING!')
 
 
 # Passing arguments to a function:
 
 def foo(a, what):
     print(a, what)
-SimpleWatcher('path/to/dir', foo, args=('Hello',), kwargs={'what': 'World'})
+SimpleWatcher(10, 'path/to/dir', foo, args=('Hello',), kwargs={'what': 'World'})
 
 
 # There is also a recursive mode:
 
-SimpleWatcher('path/to/dir', foo, recursive=True)
+SimpleWatcher(0.25, 'path/to/dir', foo, recursive=True)
 
 
 # You can ignore specific files or directories using a filter argument:
@@ -77,14 +79,7 @@ def shall_not_pass(path):
         return False
     return True
 
-SimpleWatcher('path/to/dir', foo, filter=shall_not_pass)
-
-
-# Watcher use polling so it check for changes every x seconds. You can set
-# the interval using check_interval.
-
-# Check for changes every 4 seconds.
-SimpleWatcher('path/to/dir', foo, check_interval=4)
+SimpleWatcher(2, 'path/to/dir', foo, filter=shall_not_pass)
 
 
 
@@ -110,43 +105,48 @@ class MyWatcher(Watcher):
     def on_deleted(self, item):
         pass
 
-w = MyWatcher('path/to/dir')
+# Checks 'path/to/dir' location every 10 seconds.
+w = MyWatcher(10, 'path/to/dir')
 w.start()
 
 # A Watcher class supports a filter, recursive and check_interval arguments
 # just like a SimpleWatcher class:
 
-Watcher('path/to/dir', recursive=True, filter=lambda x: True, check_interval=2)
+Watcher(10, 'path/to/dir', recursive=True, filter=lambda x: True)
 
 
 
-# A Manager class can group watchers instances and check each of it:
+# A Manager class can group watchers instances and checks each of it:
 
 from watchers import Manager
 
 manager = Manager()
-manager.add(Watcher('path/to/file'))
-manager.add(SimpleWatcher('path/to/file'))
+manager.add(Watcher(2, 'path/to/file'))
+manager.add(SimpleWatcher(0.1, 'path/to/file', foo))
 
 # Two watchers will start and look for changes:
 manager.start()
 
-# Just like a watcher, manager has is_alive property:
-if manager.is_alive:
 
-    # You can access grouped watchers using a Manager.watchers property:
-    for i in manager.watchers:
-        print(i)
+# You can access grouped watchers using a Manager.watchers property:
+for i in manager.watchers:
+    print(i)
 
 # There is no problem with adding or removing watchers when a manager
 # is running:
-w = Watcher('path/to/file')
+w = Watcher(10, 'path/to/file')
 manager.add(w)
 manager.remove(w)
 
-# Or removing all watchers with one call:
-manager.clear()
+# But remember that manager do not start added watcher...
+manager.add(w)
+w.start()
+# ... and do NOT stop during removing!
+manager.remove(w)
+w.stop()
 
+# Removing all watchers with one call:
+manager.clear()
 # Remember to stop manager!
 manager.stop()
 
