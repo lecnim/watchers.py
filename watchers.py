@@ -14,7 +14,7 @@ import threading
 from stat import *
 from collections import namedtuple
 
-__version__ = '1.0.1b'
+__version__ = '1.0.1-beta'
 
 # Minimum python 3.2
 if sys.hexversion < 0x030200F0:
@@ -158,7 +158,7 @@ class Item:
 class Watcher(BaseWatcher):
     """Watcher with events."""
 
-    def __init__(self, path, recursive=False, filter=None, check_interval=None):
+    def __init__(self, check_interval, path, recursive=False, filter=None):
         super().__init__(check_interval)
 
         # Path must be always absolute!
@@ -266,8 +266,8 @@ class Watcher(BaseWatcher):
 class SimpleWatcher(BaseWatcher):
     """A Watcher that runs callable when file system changed."""
 
-    def __init__(self, path, target, args=(), kwargs=None, recursive=False,
-                 filter=None, check_interval=None):
+    def __init__(self, check_interval, path, target, args=(), kwargs=None,
+                 recursive=False, filter=None):
         super().__init__(check_interval)
 
         self.path = os.path.abspath(path)
@@ -357,7 +357,8 @@ class Manager(BaseWatcher):
         return "{}(check_interval={!r})".format(*args)
 
     def add(self, watcher):
-        """Adds a watcher to the manager."""
+        """Adds a watcher instance to this manager. Returns False if the manager
+        already has this watcher."""
 
         if not watcher in self.watchers:
 
@@ -368,8 +369,8 @@ class Manager(BaseWatcher):
         return False
 
     def remove(self, watcher):
-        """Removes a watcher from the manager. Raises KeyError if a watcher is
-        not in the manager watchers."""
+        """Removes a watcher instance from this manager.
+        Raises KeyError if a watcher is not available in the manager."""
 
         # Removing from set is thread-safe?
         with self.watchers_lock:
@@ -380,7 +381,7 @@ class Manager(BaseWatcher):
         return True
 
     def clear(self):
-        """Removes all watchers."""
+        """Removes all watchers instances from this manager."""
 
         with self.watchers_lock:
             self.watchers = set()

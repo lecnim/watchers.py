@@ -17,6 +17,7 @@ from watchers import Watcher, SimpleWatcher, Manager
 
 # For faster testing.
 watchers.CHECK_INTERVAL = 0.25
+CHECK_INTERVAL = 0.25
 
 # Shortcuts.
 
@@ -85,7 +86,9 @@ def create_test_files():
 class BaseTest(unittest.TestCase):
     """A base test class."""
 
+    # Watcher class
     class_ = None
+    # Class __init__ attributes
     kwargs = {}
 
     def setUp(self):
@@ -103,12 +106,12 @@ class BaseTest(unittest.TestCase):
         shutil.rmtree(self.temp_path)
 
     def test_repr(self):
-        print(self.class_(**self.kwargs))
+        print(self.class_(CHECK_INTERVAL, **self.kwargs))
 
     def test(self):
         """Should detects changes in a file system."""
 
-        x = self.class_(**self.kwargs)
+        x = self.class_(CHECK_INTERVAL, **self.kwargs)
 
         # File created.
 
@@ -148,7 +151,7 @@ class BaseTest(unittest.TestCase):
     def test_recursive(self):
         """Should detects changes in a file system using recursive."""
 
-        x = self.class_(recursive=True, **self.kwargs)
+        x = self.class_(CHECK_INTERVAL, recursive=True, **self.kwargs)
 
         # File created.
 
@@ -188,7 +191,7 @@ class BaseTest(unittest.TestCase):
     def test_filter(self):
         """Can use a filter to ignore paths."""
 
-        x = self.class_(filter=lambda path: path.endswith('.txt'),
+        x = self.class_(CHECK_INTERVAL, filter=lambda path: path.endswith('.txt'),
                         **self.kwargs)
 
         # File created.
@@ -241,7 +244,7 @@ class BaseTest(unittest.TestCase):
     def test_filter_and_recursive(self):
         """Can use a filter and recursive together."""
 
-        x = self.class_(recursive=True,
+        x = self.class_(CHECK_INTERVAL, recursive=True,
                         filter=lambda path: path.endswith('.txt'),
                         **self.kwargs)
 
@@ -295,7 +298,7 @@ class BaseTest(unittest.TestCase):
     def test_permissions(self):
         """Should detects a file permission changes."""
 
-        x = self.class_(**self.kwargs)
+        x = self.class_(CHECK_INTERVAL, **self.kwargs)
 
         # File permissions.
 
@@ -310,8 +313,8 @@ class BaseTest(unittest.TestCase):
     def test_recreate(self):
         """Should detects files and dirs recreations."""
 
-        x = self.class_(**self.kwargs)
-        y = self.class_(recursive=True, **self.kwargs)
+        x = self.class_(CHECK_INTERVAL, **self.kwargs)
+        y = self.class_(CHECK_INTERVAL, recursive=True, **self.kwargs)
 
         # Recreating same file - mod time should be different.
         delete_file('a.txt')
@@ -346,7 +349,7 @@ class BaseTest(unittest.TestCase):
     def test_symlinks(self):
         """Should correctly use symlinks."""
 
-        x = self.class_(**self.kwargs)
+        x = self.class_(CHECK_INTERVAL, **self.kwargs)
         # Symlink to file: file modified.
 
         os.symlink(os.path.join('x', 'foo.txt'), 'link_to_file')
@@ -364,13 +367,13 @@ class BaseTest(unittest.TestCase):
     def test_check_interval(self):
         """Should correctly set a custom check interval."""
 
-        x = self.class_(check_interval=4, **self.kwargs)
+        x = self.class_(4, **self.kwargs)
         self.assertEqual(4, x.check_interval)
 
     def test_is_alive(self):
         """Should correctly set is_alive property."""
 
-        x = self.class_(**self.kwargs)
+        x = self.class_(CHECK_INTERVAL, **self.kwargs)
         self.assertFalse(x.is_alive)
 
     def test_delete_during_check(self):
@@ -386,7 +389,7 @@ class BaseTest(unittest.TestCase):
 
         create_file('a.txt')
         create_file('b.txt')
-        x = self.class_(**self.kwargs)
+        x = self.class_(CHECK_INTERVAL, **self.kwargs)
         x.check()
         delete_file('a.txt')
 
@@ -428,7 +431,7 @@ class TestWatcher(BaseTest):
                 nonlocal deleted
                 deleted = item
 
-        x = CustomWatcher('.')
+        x = CustomWatcher(CHECK_INTERVAL, '.')
 
         # Created file.
 
@@ -462,7 +465,7 @@ class TestWatcher(BaseTest):
             nonlocal i
             i = a + b
 
-        x = Watcher('.')
+        x = Watcher(CHECK_INTERVAL, '.')
         x.on_created(test, 1, b=1)
         create_file('new.file')
         x.check()
@@ -476,7 +479,7 @@ class TestWatcher(BaseTest):
             nonlocal i
             i = a + b
 
-        x = Watcher('.')
+        x = Watcher(CHECK_INTERVAL, '.')
         x.on_deleted(test, 1, b=1)
         os.remove('a.py')
         x.check()
@@ -490,7 +493,7 @@ class TestWatcher(BaseTest):
             nonlocal i
             i = a + b
 
-        x = Watcher('.')
+        x = Watcher(CHECK_INTERVAL, '.')
         x.on_modified(test, 1, b=1)
         modify_file('a.txt')
         x.check()
@@ -504,7 +507,7 @@ class TestWatcher(BaseTest):
             nonlocal i
             i = a + b
 
-        x = Watcher('.')
+        x = Watcher(CHECK_INTERVAL, '.')
         x.on_created(test, 1, b=1)
         create_dir('new_dir')
         x.check()
@@ -518,7 +521,7 @@ class TestWatcher(BaseTest):
             nonlocal i
             i = a + b
 
-        x = Watcher('.')
+        x = Watcher(CHECK_INTERVAL, '.')
         x.on_deleted(test, 1, b=1)
         delete_dir('x')
         x.check()
@@ -532,7 +535,7 @@ class TestWatcher(BaseTest):
             nonlocal i
             i = a + b
 
-        x = Watcher('.')
+        x = Watcher(CHECK_INTERVAL, '.')
         x.on_modified(test, 1, b=1)
         os.chmod('x', 0o777)
         x.check()
@@ -546,7 +549,7 @@ class TestWatcher(BaseTest):
             nonlocal i
             i = True
 
-        x = self.class_('.')
+        x = self.class_(CHECK_INTERVAL, '.')
         x.on_created(function)
         # Watcher started correctly.
         self.assertTrue(x.start())
@@ -591,7 +594,7 @@ class TestSimpleWatcher(BaseTest):
             nonlocal i
             i = i + a + b
 
-        x = self.class_('.', function, [1], {'b': 1})
+        x = self.class_(CHECK_INTERVAL, '.', function, [1], {'b': 1})
         create_file('new.file')
         x.check()
         self.assertEqual(2, i)
@@ -604,7 +607,7 @@ class TestSimpleWatcher(BaseTest):
             nonlocal i
             i = True
 
-        x = self.class_('.', function)
+        x = self.class_(CHECK_INTERVAL, '.', function)
         # Watcher started correctly.
         self.assertTrue(x.start())
         create_file('new.file')
@@ -639,7 +642,7 @@ class TestSimpleWatcher(BaseTest):
             # be dead, because stop() is run by the check thread!
             x.stop()
 
-        x = self.class_('.', function)
+        x = self.class_(CHECK_INTERVAL, '.', function)
         x.args = (x,)
         create_file('new.file')
         x.start()
@@ -659,7 +662,7 @@ class TestSimpleWatcher(BaseTest):
             x.stop()
             time.sleep(2)
 
-        x = self.class_('.', function)
+        x = self.class_(CHECK_INTERVAL, '.', function)
         x.args = (x,)
         x.start()
         create_file('new.file')
