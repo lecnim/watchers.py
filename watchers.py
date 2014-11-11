@@ -15,7 +15,7 @@ import threading
 from stat import *
 from collections import namedtuple
 
-__version__ = '1.0.1-beta'
+__version__ = '1.0.1-beta.2'
 
 # Minimum python 3.2
 if sys.hexversion < 0x030200F0:
@@ -376,6 +376,12 @@ class Manager:
                 raise KeyError('Manager.remove(x): watcher x not in manager')
         return True
 
+    def clear(self):
+        """Removes all watchers instances from this manager."""
+
+        with self.watchers_lock:
+            self.watchers = set()
+
     def start(self):
         """Starts all watchers, skips already started ones."""
 
@@ -392,14 +398,8 @@ class Manager:
             if i.is_alive:
                 i.stop()
 
-    def clear(self):
-        """Removes all watchers instances from this manager."""
-
-        with self.watchers_lock:
-            self.watchers = set()
-
     def check(self):
-        """Checks each watcher for changes in file system."""
+        """Triggers check in each watcher instance."""
 
         with self.watchers_lock:
             x = self.watchers.copy()
