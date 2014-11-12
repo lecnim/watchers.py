@@ -385,7 +385,7 @@ class BaseTest(unittest.TestCase):
         """Should correctly set a custom check interval."""
 
         x = self.class_(4, **self.kwargs)
-        self.assertEqual(4, x.check_interval)
+        self.assertEqual(4, x.interval)
 
     def test_is_alive(self):
         """Should correctly set is_alive property."""
