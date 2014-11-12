@@ -8,14 +8,11 @@ watchers.py
 
 |Build Status|
 
-| A simple script that monitors changes in the file system using
-polling.
-| Useful for small, platform independent projects that don’t need
-complex
-| libraries like great `watchdog`_.
+A simple script that monitors changes in the file system using
+polling. Useful for small, platform independent projects that don’t need
+complex libraries like great `watchdog`_.
 
 Facts or why you should take a good look at watchers.py:
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 -  No dependencies, only Python ``3.2``, ``3.3`` or ``3.4``
 -  Supports **Windows** and **Unix**
@@ -25,9 +22,8 @@ Facts or why you should take a good look at watchers.py:
 Example
 -------
 
-| A simple program that uses watchers.py to monitor specified directory
-in
-| 2 seconds interval. It prints the message on a change in a file
+A simple program that uses watchers.py to monitor specified directory
+in 2 seconds interval. It prints the message on a change in a file
 system.
 
 .. code:: python
@@ -43,15 +39,14 @@ system.
 Why polling? WHY?!
 ------------------
 
-Because it works everywhere and has no other dependencies than pure
-Python.
+Because it works everywhere and has no other dependencies than pure Python.
 
 Installation
 ------------
 
-Install from PyPI using pip::
+Install from PyPI using pip
 
-::
+.. code:: bash
 
     pip install watchers.py
 
@@ -75,6 +70,8 @@ Checking 8000 files in 2000 directories took:
     Watcher:        463 ms    0.058 ms
     SimpleWatcher:  379 ms    0.047 ms
 
+
+
 .. _watchdog: https://github.com/gorakhargosh/watchdog
 
 .. |Build Status| image:: https://travis-ci.org/lecnim/watchers.py.png?branch=master
@@ -89,7 +86,7 @@ setup(
     author_email='lecnim@gmail.com',
     py_modules=['watchers'],
     url='https://github.com/lecnim/watchers.py',
-    license='LICENSE',
+    license='MIT',
     description='A simple script that monitors changes in the file system using polling.',
     long_description=doc,
     classifiers=[
