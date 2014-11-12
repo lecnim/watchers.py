@@ -3,17 +3,52 @@ watchers.py
 
 [![Build Status](https://travis-ci.org/lecnim/watchers.py.png?branch=master)](https://travis-ci.org/lecnim/watchers.py)
 
-Simple script that monitors changes in the file system using polling.
-Useful for small, platform independent projects.
+A simple script that monitors changes in the file system using polling.
+Useful for small, platform independent projects that don't need complex
+libraries like great [watchdog](https://github.com/gorakhargosh/watchdog).
 
-No requirements, only Python `3.2`, `3.3` or `3.4`.
+### Facts or why you should take a good look at watchers.py:
 
-Supports __Windows__ and __Unix__.
+- No dependencies, only Python `3.2`, `3.3` or `3.4`
+- Supports __Windows__ and __Unix__
+- Only one file, less than __12 KB__
+- Simple and minimalistic
+
+
+Example
+-------
+
+A simple program that uses watchers.py to monitor specified directory in 
+2 seconds interval. It prints the message on a change in a file system.
+
+```python
+
+from watchers import SimpleWatcher
+
+def foo():
+    print('Something has changed in directory!')
+x = SimpleWatcher(2, 'path/to/dir', foo)
+x.start()
+```
+
+
+Why polling? WHY?!
+------------------
+
+Because it works everywhere and has no other dependencies than pure Python.
+
 
 Installation
 ------------
 
-Download file `watchers.py` and use it in your project. That's all!
+Install from PyPI using pip::
+
+```
+pip install watchers.py
+```
+
+Or download a file `watchers.py` and use it in your project directly.
+
 
 Performance
 -----------
@@ -34,8 +69,8 @@ SimpleWatcher:  379 ms    0.047 ms
 ```
 
 
-Examples
---------
+More Examples
+-------------
 
 ```python
 
@@ -50,13 +85,11 @@ def foo():
 x = SimpleWatcher(2, 'path/to/dir', foo)
 # Use start() to start watching.
 x.start()
-
 # You can stop Watcher using stop():
 x.stop()
 # Or use is_alive property if you want to know if watcher is still running:
 if x.is_alive:
     print('HE IS ALIVE AND HE IS WATCHING!')
-
 
 # Passing arguments to a function:
 
@@ -64,11 +97,9 @@ def foo(a, what):
     print(a, what)
 SimpleWatcher(10, 'path/to/dir', foo, args=('Hello',), kwargs={'what': 'World'})
 
-
 # There is also a recursive mode:
 
 SimpleWatcher(0.25, 'path/to/dir', foo, recursive=True)
-
 
 # You can ignore specific files or directories using a filter argument:
 
@@ -126,7 +157,6 @@ manager.add(SimpleWatcher(0.1, 'path/to/file', foo))
 
 # Two watchers will start and look for changes:
 manager.start()
-
 
 # You can access grouped watchers using a Manager.watchers property:
 for i in manager.watchers:
