@@ -93,19 +93,19 @@ setup(
     description='A simple script that monitors changes in the file system using polling.',
     long_description=doc,
     classifiers=[
-        'Classifier: Development Status :: 4 - Beta',
-        'Classifier: Intended Audience :: Developers',
-        'Classifier: Intended Audience :: System Administrators',
-        'Classifier: License :: OSI Approved :: MIT License',
-        'Classifier: Natural Language :: English',
-        'Classifier: Operating System :: Microsoft :: Windows',
-        'Classifier: Operating System :: POSIX :: Linux',
-        'Classifier: Programming Language :: Python :: 3.2',
-        'Classifier: Programming Language :: Python :: 3.3',
-        'Classifier: Programming Language :: Python :: 3.4',
-        'Classifier: Topic :: Software Development :: Libraries',
-        'Classifier: Topic :: System :: Filesystems',
-        'Classifier: Topic :: System :: Monitoring',
-        'Classifier: Topic :: Utilities'
+        'Development Status :: 4 - Beta',
+        'Intended Audience :: Developers',
+        'Intended Audience :: System Administrators',
+        'License :: OSI Approved :: MIT License',
+        'Natural Language :: English',
+        'Operating System :: Microsoft :: Windows',
+        'Operating System :: POSIX :: Linux',
+        'Programming Language :: Python :: 3.2',
+        'Programming Language :: Python :: 3.3',
+        'Programming Language :: Python :: 3.4',
+        'Topic :: Software Development :: Libraries',
+        'Topic :: System :: Filesystems',
+        'Topic :: System :: Monitoring',
+        'Topic :: Utilities'
     ]
 )
