@@ -35,6 +35,8 @@ system.
         print('Something has changed in directory!')
     x = SimpleWatcher(2, 'path/to/dir', foo)
     x.start()
+    
+`More examples available at Github.`__
 
 Why polling? WHY?!
 ------------------
@@ -73,6 +75,8 @@ Checking 8000 files in 2000 directories took:
 
 
 .. _watchdog: https://github.com/gorakhargosh/watchdog
+
+.. __: https://github.com/lecnim/watchers.py#more-examples
 
 .. |Build Status| image:: https://travis-ci.org/lecnim/watchers.py.png?branch=master
    :target: https://travis-ci.org/lecnim/watchers.py
