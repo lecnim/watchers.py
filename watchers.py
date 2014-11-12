@@ -1,9 +1,8 @@
 """
 watchers.py
 
-Monitors changes in the file system using watchers instances.
+Script that monitors changes in the file system using watchers instances.
 
-TODO: Better docstrings
 TODO: Documentation
 TODO: Better benchmark function
 
@@ -26,15 +25,15 @@ PYTHON32 = True if sys.hexversion < 0x030300F0 else False
 
 
 class BaseWatcher:
-    """Base watcher class."""
+    """Base watcher class. All other watcher should inherit from this class."""
 
-    def __init__(self, check_interval):
+    def __init__(self, interval):
 
         self._is_alive = False
         self.lock = threading.Lock()
         self.check_thread = None
         # Amount of time (in seconds) between running polling methods.
-        self.check_interval = check_interval
+        self.interval = interval
 
     @property
     def is_alive(self):
@@ -44,11 +43,12 @@ class BaseWatcher:
         return False
 
     def check(self):
-        """Override this."""
+        """This method should be override by children classes.
+        Attribute self.interval sets how often it is executed."""
         pass
 
-    def _thread_check(self):
-        """Check runs by Timer thread."""
+    def _prepare_check(self):
+        """This method is run in the Timer thread and it triggers check() method."""
 
         self.check()
         self._start_timer_thread()
@@ -57,16 +57,16 @@ class BaseWatcher:
         """Starts new Timer thread, it will run check after time interval."""
 
         # Lock pauses stop() method.
-        # Check if watcher is alive because stop() can change it during
-        # executing this method.
+        # Check if the watcher is alive because stop() can kill it during
+        # execution of this method.
         with self.lock:
             if self._is_alive:
 
                 if check_interval is None:
-                    check_interval = self.check_interval
+                    check_interval = self.interval
 
                 self.check_thread = threading.Timer(check_interval,
-                                                    self._thread_check)
+                                                    self._prepare_check)
                 self.check_thread.name = repr(self)
                 self.check_thread.daemon = True
                 self.check_thread.start()
@@ -108,7 +108,7 @@ class Item:
 
     def __init__(self, path):
 
-        # Path can be deleted during creating Item instance.
+        # Path can be deleted during creating an Item instance.
         self.path = path
         try:
             self.stat = os.stat(path)
@@ -141,7 +141,7 @@ class Item:
                 return True
             return False
 
-        # Check if file is modified.
+        # Check if a file is modified.
         a = self.stat.st_mtime, self.stat.st_size, self.stat.st_mode, \
             self.stat.st_uid, self.stat.st_gid
         b = stat.st_mtime, stat.st_size, stat.st_mode, stat.st_uid, stat.st_gid
@@ -161,11 +161,11 @@ class Watcher(BaseWatcher):
         self.path = os.path.abspath(path)
         self.is_recursive = recursive
 
-        # Callable which checks ignored paths.
+        # Callable that checks ignored paths.
         self.filter = filter
         self._events = {}
 
-        # List of watched files, key is file path, value is Item instance.
+        # List of watched files, key is a file path, value is an Item instance.
         self.watched_paths = {}
 
         for path in self._walk():
@@ -188,8 +188,7 @@ class Watcher(BaseWatcher):
                 break
 
     def check(self):
-        """Detects changes in a file system. Returns True if something
-        changed."""
+        """Detects changes in a file system. Returns True if something changed."""
 
         result = False
         stack = {}
@@ -230,6 +229,8 @@ class Watcher(BaseWatcher):
         return True
 
     # Events.
+    # TODO: Is this events system useful? I mean calling  events methods like this:
+    #       Watcher.on_created(foo)
 
     def run_event(self, name):
         if name in self._events:
@@ -260,11 +261,11 @@ class Watcher(BaseWatcher):
 
 
 class SimpleWatcher(BaseWatcher):
-    """A Watcher that runs callable when file system changed."""
+    """A Watcher that runs callable when file system has changed."""
 
-    def __init__(self, check_interval, path, target, args=(), kwargs=None,
+    def __init__(self, interval, path, target, args=(), kwargs=None,
                  recursive=False, filter=None):
-        super().__init__(check_interval)
+        super().__init__(interval)
 
         self.path = os.path.abspath(path)
         self.is_recursive = recursive
@@ -280,56 +281,50 @@ class SimpleWatcher(BaseWatcher):
         args = self.__class__.__name__, self.path, self.is_recursive
         return "{}(path={!r}, recursive={!r})".format(*args)
 
+    def _filtered_paths(self, root, paths):
+        """Yields filtered paths using self.filter and skips deleted ones."""
+
+        for i in paths:
+            if self.filter and not self.filter(os.path.join(root, i)):
+                continue
+
+            path = os.path.join(root, i)
+            try:
+                stats = os.stat(path)
+            # A path could be deleted during execution of this method.
+            except (IOError, OSError):
+                pass
+            else:
+                yield path, stats
+
     def _get_snapshot(self):
-        """Returns set with all paths in self.path."""
+        """Returns set with all paths in self.path location."""
 
         snapshot = set()
 
         for path, dirs, files in os.walk(self.path):
 
-            for i in dirs:
-                if self.filter and not self.filter(os.path.join(path, i)):
-                    continue
+            # Files.
+            for p, stats in self._filtered_paths(path, dirs):
+                snapshot.add((
+                    p, stats.st_mode, stats.st_uid, stats.st_gid
+                ))
 
-                p = os.path.join(path, i)
-                try:
-                    stats = os.stat(p)
-                except (IOError, OSError):
-                    pass
-                else:
-                    snapshot.add((
-                        p,
-                        stats.st_mode,
-                        stats.st_uid,
-                        stats.st_gid
-                    ))
-
-            for i in files:
-                if self.filter and not self.filter(os.path.join(path, i)):
-                    continue
-
-                p = os.path.join(path, i)
-                try:
-                    stats = os.stat(p)
-                except (IOError, OSError):
-                    pass
-                else:
-                    snapshot.add((
-                        p,
-                        stats.st_mode,
-                        stats.st_uid,
-                        stats.st_gid,
-                        stats.st_mtime if PYTHON32 else stats.st_mtime_ns,
-                        stats.st_size
-                    ))
+            # Directories.
+            for p, stats in self._filtered_paths(path, files):
+                snapshot.add((
+                    p,
+                    stats.st_mode, stats.st_uid, stats.st_gid,
+                    stats.st_mtime if PYTHON32 else stats.st_mtime_ns,
+                    stats.st_size
+                ))
 
             if not self.is_recursive:
                 break
         return snapshot
 
     def check(self):
-        """Detects changes in a file system. Returns True if something
-        changed."""
+        """Detects changes in a file system. Returns True if something changed."""
 
         s = self._get_snapshot()
         if self.snapshot != s:
@@ -340,17 +335,15 @@ class SimpleWatcher(BaseWatcher):
 
 
 class Manager:
-    """Manager"""
+    """Manager, class that gather watcher instances in one place."""
 
     def __init__(self):
-
         self.watchers = set()
         self.watchers_lock = threading.Lock()
 
     def __repr__(self):
         args = self.__class__.__name__, len(self.watchers)
         return "{}(watchers={!r})".format(*args)
-
 
     def add(self, watcher):
         """Adds a watcher instance to this manager. Returns False if the manager
@@ -377,7 +370,8 @@ class Manager:
         return True
 
     def clear(self):
-        """Removes all watchers instances from this manager."""
+        """Removes all watchers instances from this manager. Remember that this
+        method do not stops them."""
 
         with self.watchers_lock:
             self.watchers = set()
