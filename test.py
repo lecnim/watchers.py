@@ -4,6 +4,7 @@ Testing!
 
 import os
 import os.path
+import stat
 import sys
 import unittest
 import shutil
@@ -299,15 +300,32 @@ class BaseTest(unittest.TestCase):
 
         x = self.class_(CHECK_INTERVAL, **self.kwargs)
 
-        # File permissions.
+        # Windows supports read-only flag only!
+        if platform.system() == 'Windows':
 
-        os.chmod('a.txt', 0o777)
-        self.assertTrue(x.check())
+            # File with read-only attribute.
+            os.chmod('a.txt', stat.S_IREAD)
+            self.assertTrue(x.check())
+            # Prevent PermissionError!
+            os.chmod('a.txt', stat.S_IWRITE)
 
-        # Directory permissions.
+            # Directory with read-only attribute.
+            os.chmod('x', stat.S_IREAD)
+            self.assertTrue(x.check())
+            # Prevent PermissionError!
+            os.chmod('x', stat.S_IWRITE)
 
-        os.chmod('x', 0o777)
-        self.assertTrue(x.check())
+        else:
+
+            # File permissions.
+
+            os.chmod('a.txt', 0o777)
+            self.assertTrue(x.check())
+
+            # Directory permissions.
+
+            os.chmod('x', 0o777)
+            self.assertTrue(x.check())
 
     def test_recreate(self):
         """Should detects files and dirs recreations."""
@@ -527,7 +545,7 @@ class TestWatcher(BaseTest):
         self.assertEqual(2, i)
 
     def test_on_dir_modified(self):
-        """Should run an event if a directory modified."""
+        """Should run an event if a directory was modified."""
 
         i = 0
         def test(a, b):
@@ -536,8 +554,16 @@ class TestWatcher(BaseTest):
 
         x = Watcher(CHECK_INTERVAL, '.')
         x.on_modified(test, 1, b=1)
-        os.chmod('x', 0o777)
-        x.check()
+
+        # Windows supports read-only flag only!
+        if platform.system() == 'Windows':
+            os.chmod('x', stat.S_IREAD)
+            x.check()
+            # Prevent PermissionError!
+            os.chmod('x', stat.S_IWRITE)
+        else:
+            os.chmod('x', 0o777)
+            x.check()
         self.assertEqual(2, i)
 
     def test_thread(self):
