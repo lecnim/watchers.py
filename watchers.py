@@ -14,7 +14,7 @@ import threading
 from stat import *
 from collections import namedtuple
 
-__version__ = '1.0.1-beta.2'
+__version__ = '1.0.1-rc.1'
 
 # Minimum python 3.2
 if sys.hexversion < 0x030200F0:
