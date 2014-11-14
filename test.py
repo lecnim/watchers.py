@@ -14,7 +14,7 @@ import time
 import platform
 
 import watchers
-from watchers import Watcher, SimpleWatcher, Manager
+from watchers import Watcher, SimpleWatcher, Manager, DELETED, CREATED, MODIFIED
 
 # For faster testing.
 CHECK_INTERVAL = 0.25
@@ -428,6 +428,68 @@ class TestWatcher(BaseTest):
         'path': '.'
     }
 
+    def test_poll(self):
+
+        x = Watcher(CHECK_INTERVAL, '.', recursive=True)
+
+        # File created.
+
+        create_file('new.txt')
+        create_file('x', 'new.py')
+
+        i = x.poll()
+        self.assertEqual(len(i), 2)
+        self.assertCountEqual(i, [(CREATED, os.path.abspath('new.txt')),
+                                  (CREATED, os.path.abspath(os.path.join('x', 'new.py')))])
+
+        # File removed.
+        #
+        delete_file('new.txt')
+        delete_file('x', 'new.py')
+
+        i = x.poll()
+        self.assertEqual(len(i), 2)
+        self.assertCountEqual(i, [(DELETED, os.path.abspath('new.txt')),
+                                  (DELETED, os.path.abspath(os.path.join('x', 'new.py')))])
+
+
+        # # File modified.
+
+        modify_file('a.txt')
+        modify_file('x', 'foo.py')
+
+        i = x.poll()
+        self.assertEqual(len(i), 2)
+        self.assertCountEqual(i, [(MODIFIED, os.path.abspath('a.txt')),
+                                  (MODIFIED, os.path.abspath(os.path.join('x', 'foo.py')))])
+
+
+
+
+        #
+        # Directory created.
+        create_dir('new_dir')
+        create_dir('x', 'new_dir')
+
+        i = x.poll()
+        self.assertEqual(len(i), 2)
+        self.assertCountEqual(i, [(CREATED, os.path.abspath('new_dir')),
+                                  (CREATED, os.path.abspath(os.path.join('x', 'new_dir')))])
+
+
+        #
+        # # Directory removed.
+        #
+        delete_dir('new_dir')
+        delete_dir('x', 'new_dir')
+
+        i = x.poll()
+        self.assertEqual(len(i), 2)
+        self.assertCountEqual(i, [(DELETED, os.path.abspath('new_dir')),
+                                  (DELETED, os.path.abspath(os.path.join('x', 'new_dir')))])
+
+
+
     def test_override_events(self):
         """Should run an overridden event methods with correct arguments."""
 
@@ -836,7 +898,7 @@ del BaseTest
 
 # Benchmark
 
-def benchmark(times=10000):
+def benchmark(times=1000):
     """Benchmarks each watcher."""
 
     # Prepare temp directory with example files.

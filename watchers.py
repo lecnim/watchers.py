@@ -24,6 +24,12 @@ if sys.hexversion < 0x030200F0:
 PYTHON32 = True if sys.hexversion < 0x030300F0 else False
 
 
+Status = namedtuple('Status', ['type', 'path'])
+
+CREATED = 1
+MODIFIED = 2
+DELETED = 3
+
 class BaseWatcher:
     """Base watcher class. All other watcher should inherit from this class."""
 
@@ -108,12 +114,15 @@ class Item:
 
     def __init__(self, path):
 
+        self._status = None
+
         # Path can be deleted during creating an Item instance.
         self.path = path
         try:
             self.stat = os.stat(path)
         except (IOError, OSError):
             self.path = None
+            self._status = DELETED
 
         if self.path:
             if S_ISDIR(self.stat.st_mode):
@@ -121,34 +130,78 @@ class Item:
             else:
                 self.is_file = True
 
-    def is_modified(self):
-        """Returns True if a file/directory was modified."""
+    def poll_status(self):
 
-        # Path can be deleted before this method.
         try:
             stat = os.stat(self.path)
         except (IOError, OSError):
-            return True
+            stat = None
 
-        if not self.is_file:
-            # st_mode: File mode (permissions)
-            # st_uid: Owner id.
-            # st_gid: Group id.
-            a = self.stat.st_mode, self.stat.st_uid, self.stat.st_gid
-            b = stat.st_mode, stat.st_uid, stat.st_gid
-            if a != b:
+        # Path not found.
+        if not stat:
+            if self._status == DELETED:
+                return None
+            else:
+                self._status = DELETED
+                return DELETED
+
+        # Path found.
+        else:
+
+            if self._status == DELETED:
                 self.stat = stat
-                return True
-            return False
+                self._status = CREATED
+                return CREATED
 
-        # Check if a file is modified.
-        a = self.stat.st_mtime, self.stat.st_size, self.stat.st_mode, \
-            self.stat.st_uid, self.stat.st_gid
-        b = stat.st_mtime, stat.st_size, stat.st_mode, stat.st_uid, stat.st_gid
-        if a != b:
-            self.stat = stat
-            return True
-        return False
+            else:
+
+                if not self.is_file:
+                    # st_mode: File mode (permissions)
+                    # st_uid: Owner id.
+                    # st_gid: Group id.
+                    a = self.stat.st_mode, self.stat.st_uid, self.stat.st_gid
+                    b = stat.st_mode, stat.st_uid, stat.st_gid
+                    if a != b:
+                        self.stat = stat
+                        self._status = MODIFIED
+                        return MODIFIED
+                    return None
+
+                # Check if a file is modified.
+                a = self.stat.st_mtime, self.stat.st_size, self.stat.st_mode, \
+                    self.stat.st_uid, self.stat.st_gid
+                b = stat.st_mtime, stat.st_size, stat.st_mode, stat.st_uid, stat.st_gid
+                if a != b:
+                    self.stat = stat
+                    self._status = MODIFIED
+                    return MODIFIED
+                return None
+
+
+# DirectoryWatcher()
+# FileWatcher()
+# SimpleWatcher() SimpleFileWatcher() SimpleDirectoryWatcher()
+
+# poll() -> events
+
+class FileWatcher(BaseWatcher):
+    """TODO"""
+
+    def __init__(self, interval, path):
+        super().__init__(interval)
+
+        self.path = path
+        self.item = Item(path)
+
+    def __repr__(self):
+        args = self.__class__.__name__, self.path
+        return "{}(path={!r})".format(*args)
+
+    def check(self):
+
+        if self.item.is_modified():
+            pass
+
 
 
 class Watcher(BaseWatcher):
@@ -190,43 +243,34 @@ class Watcher(BaseWatcher):
     def check(self):
         """Detects changes in a file system. Returns True if something changed."""
 
-        result = False
-        stack = {}
+        return True if self.poll() else False
+
+    def poll(self):
+
+        events = []
+
+        for i in self.watched_paths.copy().values():
+
+            status = i.poll_status()
+
+            if status == MODIFIED:
+                self.on_modified(i)
+                events.append(Status(MODIFIED, i.path))
+            elif status == DELETED:
+                self.on_deleted(i)
+                self.watched_paths.pop(i.path)
+                events.append(Status(DELETED, i.path))
 
         for path in self._walk():
-            if self._path_changed(path, stack):
-                result = True
+            if path not in self.watched_paths:
+                x = Item(path)
+                if x.path:
+                    self.watched_paths[path] = x
+                    self.on_created(x)
+                    events.append(Status(CREATED, x.path))
 
-        # Deleted paths.
-        if self.watched_paths:
-            for path in self.watched_paths.values():
-                self.on_deleted(path)
-                result = True
+        return events
 
-        self.watched_paths = stack
-        return result
-
-    def _path_changed(self, path, stack):
-        """Checks if a path was modified or created."""
-
-        # File exists and could be modified.
-        if path in self.watched_paths:
-            if self.watched_paths[path].is_file == os.path.isfile(path):
-
-                x = self.watched_paths.pop(path)
-                stack[path] = x
-
-                if x.is_modified():
-                    self.on_modified(x)
-                    return True
-                return False
-
-        # Path was created.
-        x = Item(path)
-        if x.path:
-            stack[path] = x
-            self.on_created(x)
-        return True
 
     # Events.
     # TODO: Is this events system useful? I mean calling  events methods like this:
