@@ -14,7 +14,7 @@ import time
 import platform
 
 import watchers
-from watchers import Watcher, SimpleWatcher, Manager, DELETED, CREATED, MODIFIED
+from watchers import Watcher, SimpleWatcher, Manager, DELETED, CREATED, MODIFIED, Item
 
 # For faster testing.
 CHECK_INTERVAL = 0.25
@@ -46,6 +46,9 @@ def modify_file(*path):
     """Modifies a file data - appends 'hello'."""
     with open(os.path.join(*path), 'a') as file:
         file.write('hello')
+
+
+
 
 
 def absolute_paths(*paths):
@@ -82,6 +85,377 @@ def create_test_files():
 
 # Tests.
 
+class TestItem(unittest.TestCase):
+
+    path = 'a'
+
+    def setUp(self):
+
+        # Create temporary directory with example files and change current
+        # working directory to it.
+        self.cwd = os.getcwd()
+        self.temp_path = tempfile.mkdtemp()
+        os.chdir(self.temp_path)
+        self.prepare_files()
+        self.item = Item(self.path)
+
+    def prepare_files(self):
+        pass
+
+    # Tests:
+
+    def test_poll(self, status=None):
+
+        if status is None:
+
+            if self.item.status is DELETED:
+                self.assertEqual(self.item.poll(), None)
+                self.assertEqual(self.item.status, DELETED)
+                self.assertEqual(self.item.stat, None)
+
+            else:
+                self.assertEqual(self.item.poll(), None)
+                self.assertEqual(self.item.status, None)
+                self.assertEqual(self.item.stat, os.stat(self.item.path))
+
+        elif status == MODIFIED:
+
+            self.assertEqual(self.item.poll(), MODIFIED)
+            self.assertEqual(self.item.status, MODIFIED)
+            self.assertEqual(self.item.stat, os.stat(self.item.path))
+
+        elif status == DELETED:
+
+            self.assertEqual(self.item.poll(), DELETED)
+            self.assertEqual(self.item.status, DELETED)
+            self.assertEqual(self.item.stat, None)
+
+        elif status == CREATED:
+
+            self.assertEqual(self.item.poll(), CREATED)
+            self.assertEqual(self.item.status, CREATED)
+            self.assertEqual(self.item.stat, os.stat(self.item.path))
+
+    def test_not_found(self):
+        self.assertRaises((IOError, OSError), Item, 'path/not/found')
+
+
+class TestFileItem(TestItem):
+
+    path = 'a.txt'
+
+    def prepare_files(self):
+        create_file('a.txt')
+
+    # Tests:
+
+    def test_init(self):
+
+        self.assertEqual(self.item.status, None)
+        self.assertEqual(self.item.path, os.path.abspath('a.txt'))
+        self.assertEqual(self.item.is_file, True)
+        self.assertEqual(self.item.stat, os.stat('a.txt'))
+
+    def test_modify(self):
+
+        modify_file('a.txt')
+        self.test_poll(MODIFIED)
+        self.test_poll(None)
+
+    def test_delete(self):
+
+        delete_file('a.txt')
+        self.test_poll(DELETED)
+        self.test_poll(None)
+
+    def test_create(self):
+
+        delete_file('a.txt')
+        self.test_poll(DELETED)
+        create_file('a.txt', data='i live again')
+        self.test_poll(CREATED)
+        self.test_poll(None)
+
+    def test_move(self):
+
+        create_dir('x')
+        shutil.move('a.txt', 'x')
+        self.test_poll(DELETED)
+        self.test_poll(None)
+
+    def test_recreate(self):
+
+        # Recreating same file - mod time should be different.
+
+        delete_file('a.txt')
+        time.sleep(0.5)
+        create_file('a.txt')
+        self.test_poll(MODIFIED)
+        self.test_poll(None)
+
+        # Recreating same file with different content - size file is used.
+
+        delete_file('a.txt')
+        create_file('a.txt', data='dog')
+        self.test_poll(MODIFIED)
+        self.test_poll(None)
+
+    def test_swap_with_directory(self):
+
+        delete_file('a.txt')
+        create_dir('a.txt')
+        self.test_poll(DELETED)
+        self.test_poll(None)
+
+    def test_rename(self):
+
+        os.rename('a.txt', 'b.txt')
+        self.test_poll(DELETED)
+
+        os.rename('b.txt', 'a.txt')
+        self.test_poll(CREATED)
+
+        os.rename('a.txt', 'b.txt')
+        time.sleep(0.5)
+        os.rename('b.txt', 'a.txt')
+        self.test_poll(None)
+
+    def test_cwd(self):
+
+        create_dir('dir')
+        x = Item('a.txt')
+        modify_file('a.txt')
+        os.chdir('dir')
+        self.assertEqual(MODIFIED, x.poll())
+
+
+class TestDirectoryItem(TestItem):
+
+    path = 'a'
+
+    def prepare_files(self):
+        create_dir('a')
+        create_file('a', 'cat.txt')
+        create_dir('a', 'b')
+        create_dir('a', 'dir')
+
+    # Tests:
+
+    def test_init(self):
+        """Test instance attributes"""
+
+        self.assertEqual(self.item.status, None)
+        self.assertEqual(self.item.path, os.path.abspath('a'))
+        self.assertEqual(self.item.is_file, False)
+        self.assertEqual(self.item.stat, os.stat('a'))
+
+    def test_delete(self):
+        """Delete directory"""
+
+        delete_dir('a')
+        self.test_poll(DELETED)
+        self.test_poll(None)
+
+    def test_create(self):
+        """Create directory"""
+
+        delete_dir('a')
+        self.test_poll(DELETED)
+        create_dir('a')
+        self.test_poll(CREATED)
+        self.test_poll(None)
+
+    def test_move(self):
+        """Move directory"""
+
+        create_dir('x')
+        shutil.move('a', os.path.join('x'))
+        self.test_poll(DELETED)
+
+    def test_recreate(self):
+        """Delete directory and then create it again"""
+
+        # Recreating same directory but with different content.
+
+        delete_dir('a')
+        time.sleep(0.2)
+        create_dir('a')
+        self.test_poll(MODIFIED)
+        self.test_poll(None)
+
+        # Recreating same file - mod time should be different,
+        # but files structure does not change.
+
+        time.sleep(0.2)
+        delete_dir('a')
+        create_dir('a')
+
+        self.test_poll(None)
+
+    def test_swap_with_file(self):
+        """Delete directory and create file instead"""
+
+        delete_dir('a')
+        create_file('a')
+        self.test_poll(DELETED)
+
+    def test_rename(self):
+        """Rename directory"""
+
+        os.rename('a', 'b')
+        self.test_poll(DELETED)
+
+        os.rename('b', 'a')
+        self.test_poll(CREATED)
+
+        os.rename('a', 'b')
+        time.sleep(0.5)
+        os.rename('b', 'a')
+        self.test_poll(None)
+
+    def test_cwd(self):
+        """Item should works correctly when user change the working directory"""
+
+        x = Item('a')
+        create_dir('a', 'x')
+        os.chdir('a')
+        self.test_poll(MODIFIED)
+
+    def test_permissions(self):
+        """Permissions change"""
+
+        # Windows supports read-only flag only!
+        if platform.system() == 'Windows':
+
+            # File with read-only attribute.
+            os.chmod('a', stat.S_IREAD)
+            self.test_poll(MODIFIED)
+            # Prevent PermissionError!
+            os.chmod('a', stat.S_IWRITE)
+
+        else:
+            # Directory permissions.
+
+            os.chmod('a', 0o777)
+            self.test_poll(MODIFIED)
+
+
+    # Changes in directory content.
+
+    def test_create_content(self):
+        """New item in directory"""
+
+        # File
+
+        create_file('a', 'new.file')
+        self.test_poll(MODIFIED)
+        self.test_poll(None)
+
+        # Directory.
+
+        create_dir('a', 'newdir')
+        self.test_poll(MODIFIED)
+        self.test_poll(None)
+
+    def test_modify_content(self):
+        """Modify item in directory"""
+
+        time.sleep(0.1)
+        modify_file('a', 'cat.txt')
+        self.test_poll(None)
+
+    def test_delete_content(self):
+        """Remove item from directory"""
+
+        # File
+
+        delete_file('a', 'cat.txt')
+        self.test_poll(MODIFIED)
+        self.test_poll(None)
+
+        # Directory
+
+        delete_dir('a', 'dir')
+        self.test_poll(MODIFIED)
+        self.test_poll(None)
+
+    def test_overwrite_content(self):
+        """Overwrite item in directory"""
+
+        # File
+        # Treat as a modify of file, so nothing changed.
+
+        time.sleep(0.2)
+        delete_file('a', 'cat.txt')
+        create_file('a', 'cat.txt')
+
+        self.test_poll(None)
+
+        # Directory
+        # Treat as modify of directory, so nothing changed.
+
+        time.sleep(0.2)
+        delete_dir('a', 'dir')
+        create_dir('a', 'dir')
+        create_file('a', 'dir', 'new.file')
+
+        self.test_poll(None)
+
+    def test_rename_content(self):
+        """Rename item in directory"""
+
+        # File
+
+        os.rename(os.path.join('a', 'cat.txt'), 'dog.txt')
+        self.test_poll(MODIFIED)
+        self.test_poll(None)
+
+        # Directory
+
+        os.rename(os.path.join('a', 'dir'), 'hello')
+        self.test_poll(MODIFIED)
+        self.test_poll(None)
+
+    def test_swap_content(self):
+        """Remove file from directory and create new directory instead"""
+
+        delete_file('a', 'cat.txt')
+        create_dir('a', 'cat.txt')
+
+        self.test_poll(MODIFIED)
+        self.test_poll(None)
+
+    def test_create_symlink_in_content(self):
+        """Create symlinks in directory"""
+
+        # Symlink to file.
+
+        create_file('test.txt')
+        os.chdir('a')
+        os.symlink('test.txt', 'link')
+        os.chdir(self.temp_path)
+
+        self.test_poll(MODIFIED)
+        self.test_poll(None)
+
+        # Symlink to directory.
+
+        create_dir('dog')
+        p = os.path.abspath('dog')
+        os.chdir('a')
+        os.unlink('link')
+        os.symlink(p, 'link')
+        os.chdir(self.temp_path)
+
+        self.test_poll(MODIFIED)
+        self.test_poll(None)
+
+    def test_delete_symlink_from_content(self):
+        pass
+        # TODO
+
+
+
 
 class BaseTest(unittest.TestCase):
     """A base test class."""
@@ -107,6 +481,19 @@ class BaseTest(unittest.TestCase):
 
     def test_repr(self):
         print(self.class_(CHECK_INTERVAL, **self.kwargs))
+
+    # def test_polll(self):
+    #
+    #     x = self.class_(CHECK_INTERVAL, **self.kwargs)
+    #
+    #     create_file('new.txt')
+    #
+    #     result = [(i.status, i.path) for i in x.poll()]
+    #
+    #     self.assertIn((CREATED, os.path.abspath('new.txt')), result)
+    #     self.assertIn((MODIFIED, '.'), result)
+    #     self.assertFalse(1)
+
 
     def test(self):
         """Should detects changes in a file system."""
@@ -428,6 +815,8 @@ class TestWatcher(BaseTest):
         'path': '.'
     }
 
+    # TODO:
+
     def test_poll(self):
 
         x = Watcher(CHECK_INTERVAL, '.', recursive=True)
@@ -435,59 +824,47 @@ class TestWatcher(BaseTest):
         # File created.
 
         create_file('new.txt')
-        create_file('x', 'new.py')
 
         i = x.poll()
-        self.assertEqual(len(i), 2)
-        self.assertCountEqual(i, [(CREATED, os.path.abspath('new.txt')),
-                                  (CREATED, os.path.abspath(os.path.join('x', 'new.py')))])
+        self.assertEqual(len(i), 1)
+        self.assertEqual(CREATED, i[0].status)
+        self.assertEqual(os.path.abspath('new.txt'), i[0].path)
 
         # File removed.
-        #
+
         delete_file('new.txt')
-        delete_file('x', 'new.py')
 
         i = x.poll()
-        self.assertEqual(len(i), 2)
-        self.assertCountEqual(i, [(DELETED, os.path.abspath('new.txt')),
-                                  (DELETED, os.path.abspath(os.path.join('x', 'new.py')))])
+        self.assertEqual(len(i), 1)
+        self.assertEqual(DELETED, i[0].status)
+        self.assertEqual(os.path.abspath('new.txt'), i[0].path)
 
-
-        # # File modified.
+        # File modified.
 
         modify_file('a.txt')
-        modify_file('x', 'foo.py')
 
         i = x.poll()
-        self.assertEqual(len(i), 2)
-        self.assertCountEqual(i, [(MODIFIED, os.path.abspath('a.txt')),
-                                  (MODIFIED, os.path.abspath(os.path.join('x', 'foo.py')))])
+        self.assertEqual(len(i), 1)
+        self.assertEqual(MODIFIED, i[0].status)
+        self.assertEqual(os.path.abspath('a.txt'), i[0].path)
 
-
-
-
-        #
         # Directory created.
+
         create_dir('new_dir')
-        create_dir('x', 'new_dir')
 
         i = x.poll()
-        self.assertEqual(len(i), 2)
-        self.assertCountEqual(i, [(CREATED, os.path.abspath('new_dir')),
-                                  (CREATED, os.path.abspath(os.path.join('x', 'new_dir')))])
+        self.assertEqual(len(i), 1)
+        self.assertEqual(CREATED, i[0].status)
+        self.assertEqual(os.path.abspath('new_dir'), i[0].path)
 
+        # Directory deleted.
 
-        #
-        # # Directory removed.
-        #
         delete_dir('new_dir')
-        delete_dir('x', 'new_dir')
 
         i = x.poll()
-        self.assertEqual(len(i), 2)
-        self.assertCountEqual(i, [(DELETED, os.path.abspath('new_dir')),
-                                  (DELETED, os.path.abspath(os.path.join('x', 'new_dir')))])
-
+        self.assertEqual(len(i), 1)
+        self.assertEqual(DELETED, i[0].status)
+        self.assertEqual(os.path.abspath('new_dir'), i[0].path)
 
 
     def test_override_events(self):
@@ -539,83 +916,89 @@ class TestWatcher(BaseTest):
     def test_on_file_created(self):
         """Should run an event if a file created."""
 
-        i = 0
-        def test(a, b):
-            nonlocal i
-            i = a + b
+        i = False
 
-        x = Watcher(CHECK_INTERVAL, '.')
-        x.on_created(test, 1, b=1)
+        class CustomWatcher(Watcher):
+            def on_created(self, item):
+                nonlocal i
+                i = True
+
+        x = CustomWatcher(CHECK_INTERVAL, '.')
         create_file('new.file')
         x.check()
-        self.assertEqual(2, i)
+        self.assertTrue(i)
 
     def test_on_file_deleted(self):
         """Should run an event if a file deleted."""
 
-        i = 0
-        def test(a, b):
-            nonlocal i
-            i = a + b
+        i = False
 
-        x = Watcher(CHECK_INTERVAL, '.')
-        x.on_deleted(test, 1, b=1)
+        class CustomWatcher(Watcher):
+            def on_deleted(self, item):
+                nonlocal i
+                i = True
+
+        x = CustomWatcher(CHECK_INTERVAL, '.')
         os.remove('a.py')
         x.check()
-        self.assertEqual(2, i)
+        self.assertTrue(i)
 
     def test_on_file_modified(self):
         """Should run an event if a file modified."""
 
-        i = 0
-        def test(a, b):
-            nonlocal i
-            i = a + b
+        i = False
 
-        x = Watcher(CHECK_INTERVAL, '.')
-        x.on_modified(test, 1, b=1)
+        class CustomWatcher(Watcher):
+            def on_modified(self, item):
+                nonlocal i
+                i = True
+
+        x = CustomWatcher(CHECK_INTERVAL, '.')
         modify_file('a.txt')
         x.check()
-        self.assertEqual(2, i)
+        self.assertTrue(i)
 
     def test_on_dir_created(self):
         """Should run an event if a directory created."""
 
-        i = 0
-        def test(a, b):
-            nonlocal i
-            i = a + b
+        i = False
 
-        x = Watcher(CHECK_INTERVAL, '.')
-        x.on_created(test, 1, b=1)
+        class CustomWatcher(Watcher):
+            def on_created(self, item):
+                nonlocal i
+                i = True
+
+        x = CustomWatcher(CHECK_INTERVAL, '.')
         create_dir('new_dir')
         x.check()
-        self.assertEqual(2, i)
+        self.assertTrue(i)
 
     def test_on_dir_deleted(self):
         """Should run an event if a directory deleted."""
 
-        i = 0
-        def test(a, b):
-            nonlocal i
-            i = a + b
+        i = False
 
-        x = Watcher(CHECK_INTERVAL, '.')
-        x.on_deleted(test, 1, b=1)
+        class CustomWatcher(Watcher):
+            def on_deleted(self, item):
+                nonlocal i
+                i = True
+
+        x = CustomWatcher(CHECK_INTERVAL, '.')
         delete_dir('x')
         x.check()
-        self.assertEqual(2, i)
+        self.assertTrue(i)
 
     def test_on_dir_modified(self):
         """Should run an event if a directory was modified."""
 
-        i = 0
-        def test(a, b):
-            nonlocal i
-            i = a + b
+        i = False
 
-        x = Watcher(CHECK_INTERVAL, '.')
-        x.on_modified(test, 1, b=1)
+        class CustomWatcher(Watcher):
+            def on_modified(self, item):
+                nonlocal i
+                i = True
+
+        x = CustomWatcher(CHECK_INTERVAL, '.')
 
         # Windows supports read-only flag only!
         if platform.system() == 'Windows':
@@ -626,18 +1009,19 @@ class TestWatcher(BaseTest):
         else:
             os.chmod('x', 0o777)
             x.check()
-        self.assertEqual(2, i)
+        self.assertTrue(i)
 
     def test_thread(self):
         """Can start a new thread to check a file system changes."""
 
         i = False
-        def function():
-            nonlocal i
-            i = True
 
-        x = self.class_(CHECK_INTERVAL, '.')
-        x.on_created(function)
+        class CustomWatcher(Watcher):
+            def on_created(self, item):
+                nonlocal i
+                i = True
+
+        x = CustomWatcher(CHECK_INTERVAL, '.')
         # Watcher started correctly.
         self.assertTrue(x.start())
         # Watcher already started.
@@ -856,14 +1240,14 @@ class TestManager(unittest.TestCase):
         """Can start a new thread to check each watcher."""
 
         i = False
-        def function():
-            nonlocal i
-            i = True
+
+        class CustomWatcher(Watcher):
+            def on_created(self, item):
+                nonlocal i
+                i = True
 
         m = Manager()
-
-        a = Watcher(CHECK_INTERVAL, '.')
-        a.on_created(function)
+        a = CustomWatcher(CHECK_INTERVAL, '.')
         m.add(a)
 
         m.start()
@@ -894,6 +1278,7 @@ class TestManager(unittest.TestCase):
 
 # Prevent testing base class.
 del BaseTest
+del TestItem
 
 
 # Benchmark
