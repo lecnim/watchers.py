@@ -120,107 +120,56 @@ class BaseWatcher:
 
 # Polling Classes.
 
+
 class BasePoller:
 
-    def __init__(self, path, comparisons=[]):
-        self.path = path
-
-        self.comparisons = []
-        for i in comparisons:
-            self.comparisons.append(i(path))
-
-
-
-    def compare_stats(self, a, b):
+    def on_create(self, item):
         pass
+    def on_modify(self, item):
+        pass
+    def on_delete(self, item):
+        pass
+
+class FilePoller(BasePoller):
+
+    def __init__(self, item):
+
+        self.stats = item.stat
 
     def poll(self, item):
 
-        try:
-            stat = os.stat(item.path)
-        except (IOError, OSError):
-            if item.status == DELETED:
-                return None, None
-            else:
-                return DELETED, None
-
-        # Path found.
-
-        # Swapped file and directory.
-        if S_ISDIR(stat.st_mode) and item.is_file or \
-           not S_ISDIR(stat.st_mode) and not item.is_file:
-
-            if item.status == DELETED:
-                return None, None
-            else:
-                return DELETED, None
-
-        # Item was deleted, but it lives again!
-        if item.status == DELETED:
-            self.on_create(item)
-            return CREATED, stat
-
-        for i in self.comparisons:
-            if i(item, stat):
-                return MODIFIED, stat
-        return None, stat
-
-        # if self.compare_stats(stat, item.stat):
-        #     return MODIFIED, stat
-        # else:
-        #     return None, stat
-
-    def on_create(self, item):
-        for i in self.comparisons:
-            try:
-                i.on_create(item)
-            except AttributeError:
-                pass
-
-
-
-class FilePoller:
-
-    def __init__(self, path):
-        pass
-
-    def __call__(self, item, stat):
-
         # Check if a file is modified.
-        stat_a = item.stat.st_mtime, item.stat.st_size, item.stat.st_mode, item.stat.st_uid, item.stat.st_gid
-        stat_b = stat.st_mtime, stat.st_size, stat.st_mode, stat.st_uid, stat.st_gid
+        stat_a = item.stat.st_mtime, item.stat.st_size
+        stat_b = self.stats.st_mtime, self.stats.st_size
 
-        if stat_a != stat_b:
-            return True
-        else:
-            return False
+        self.stats = item.stat
+        return True if stat_a != stat_b else False
 
-class ComparePermissions:
-    def __init__(self, path):
-        pass
+class PermissionsPoller(BasePoller):
+    def __init__(self, item):
 
-    def __call__(self, item, stat):
+        self.stats = item.stat
+
+    def poll(self, item):
 
         # st_mode: File mode (permissions)
         # st_uid: Owner id.
         # st_gid: Group id.
         stat_a = item.stat.st_mode, item.stat.st_uid, item.stat.st_gid
-        stat_b = stat.st_mode, stat.st_uid, stat.st_gid
+        stat_b = self.stats.st_mode, self.stats.st_uid, self.stats.st_gid
 
-        if stat_a != stat_b:
-            return True
-        return False
+        self.stats = item.stat
+        return True if stat_a != stat_b else False
 
-class CompareDirectoryItems:
+class DirectoryItemsPoller(BasePoller):
 
-    def __init__(self, path):
+    def __init__(self, item):
 
-        self.path = path
+        self.dirs = None
+        self.files = None
 
-        for _, dirs, files in os.walk(path):
-            self.dirs = set(dirs)
-            self.files = set(files)
-            break
+        self.path = item.path
+        self.on_create(item)
 
     def on_create(self, item):
 
@@ -229,20 +178,21 @@ class CompareDirectoryItems:
             self.files = set(files)
             break
 
-    def __call__(self, item, stat):
-        for path, dirs, files in os.walk(item.path):
+    def poll(self, item):
+
+        for _, dirs, files in os.walk(item.path):
             if set(dirs) != self.dirs or set(files) != self.files:
                 self.dirs = set(dirs)
                 self.files = set(files)
                 return True
             break
-
+        return False
 
 
 
 class Item:
 
-    def __init__(self, path, poller=None):
+    def __init__(self, path, pollers=None):
 
         self.path = os.path.abspath(path)
         self.stat = os.stat(path)
@@ -250,37 +200,96 @@ class Item:
         self.status = None
         self.is_file = None
 
-        if poller:
-            self.poller = BasePoller(self.path, poller)
+        self.pollers = [i(self) for i in pollers] if pollers else None
 
-
-        # self.poller = poller(self.path, self.is_file) if poller else None
-
-        self.children = True
-
+        # Item is directory.
 
         if S_ISDIR(self.stat.st_mode):
             self.is_file = False
-            if poller is None:
-                self.poller = BasePoller(self.path, [ComparePermissions, CompareDirectoryItems])
+            if pollers is None:
+                self.pollers = [PermissionsPoller(self),
+                                DirectoryItemsPoller(self)]
+
+        # Item is file.
+
         else:
             self.is_file = True
-            if poller is None:
-                self.poller = BasePoller(self.path, [FilePoller])
+            if pollers is None:
+                self.pollers = [FilePoller(self), PermissionsPoller(self)]
 
     def poll(self):
 
-        status, stat = self.poller.poll(self)
+        try:
+            stat = os.stat(self.path)
+        except (IOError, OSError):
+            return self.update_status(DELETED)
 
-        if self.status == DELETED and status is None:
-            self.status = DELETED
-        else:
-            self.status = status
+        # Path found.
+
+        # Swapped file and directory.
+        if S_ISDIR(stat.st_mode) and self.is_file or \
+           not S_ISDIR(stat.st_mode) and not self.is_file:
+            return self.update_status(DELETED)
 
         self.stat = stat
-        return status
 
+        # Item was deleted, but it lives again!
+        if self.status == DELETED:
+            return self.update_status(CREATED)
 
+        for i in self.pollers:
+            if i.poll(self):
+                return self.update_status(MODIFIED)
+
+        # Nothing changed.
+        self.stat = stat
+        self.status = None
+        return None
+
+    def update_status(self, flag):
+
+        if flag == DELETED:
+
+            for i in self.pollers:
+                i.on_delete(self)
+
+            self.stat = None
+
+            if self.status == DELETED:
+                return None
+            else:
+                self.status = DELETED
+                self.on_delete()
+                return DELETED
+
+        elif flag == CREATED:
+
+            for i in self.pollers:
+                i.on_create(self)
+
+            self.status = CREATED
+            self.on_create()
+            return CREATED
+
+        elif flag == MODIFIED:
+
+            for i in self.pollers:
+                i.on_modify(self)
+
+            self.status = MODIFIED
+            self.on_modify()
+            return MODIFIED
+
+    # Events
+
+    def on_create(self):
+        pass
+
+    def on_modify(self):
+        pass
+
+    def on_delete(self):
+        pass
 
 
 
@@ -295,14 +304,13 @@ class Directory:
 
         # Callable that checks ignored paths.
         self.filter = filter
-        self._events = {}
 
         # List of watched files, key is a file path, value is an Item instance.
-        self.watched_paths = {}
+        self.items = {}
 
         for path in self._walk():
-            p = [ComparePermissions] if os.path.isdir(path) else None
-            self.watched_paths[path] = Item(path, poller=p)
+            p = [DirectoryItemsPoller, PermissionsPoller] if os.path.isdir(path) else None
+            self.items[path] = Item(path, pollers=p)
 
     def __repr__(self):
         args = self.__class__.__name__, self.path, self.is_recursive
@@ -327,7 +335,7 @@ class Directory:
 
         events = []
 
-        for i in self.watched_paths.copy().values():
+        for i in self.items.copy().values():
 
             status = i.poll()
             print(i, status)
@@ -345,19 +353,19 @@ class Directory:
 
             elif status == DELETED:
                 self.on_deleted(i)
-                self.watched_paths.pop(i.path)
+                self.items.pop(i.path)
                 events.append(i)
 
         for path in self._walk():
-            if path not in self.watched_paths:
+            if path not in self.items:
                 try:
-                    p = [ComparePermissions] if os.path.isdir(path) else None
-                    x = Item(path, poller=p)
+                    p = [DirectoryItemsPoller, PermissionsPoller] if os.path.isdir(path) else None
+                    x = Item(path, pollers=p)
                 except (IOError, OSError):
                     continue
                 x.status = CREATED
                 if x.path:
-                    self.watched_paths[path] = x
+                    self.items[path] = x
                     self.on_created(x)
                     events.append(x)
 

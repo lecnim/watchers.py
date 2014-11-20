@@ -14,7 +14,7 @@ import time
 import platform
 
 import watchers
-from watchers import Watcher, SimpleWatcher, Manager, DELETED, CREATED, MODIFIED, Item
+from watchers import Watcher, SimpleWatcher, Manager, DELETED, CREATED, MODIFIED, Item, Directory
 
 # For faster testing.
 CHECK_INTERVAL = 0.25
@@ -319,7 +319,7 @@ class TestDirectoryItem(TestItem):
         x = Item('a')
         create_dir('a', 'x')
         os.chdir('a')
-        self.test_poll(MODIFIED)
+        self.assertEqual(MODIFIED, x.poll())
 
     def test_permissions(self):
         """Permissions change"""
@@ -338,7 +338,6 @@ class TestDirectoryItem(TestItem):
 
             os.chmod('a', 0o777)
             self.test_poll(MODIFIED)
-
 
     # Changes in directory content.
 
@@ -455,6 +454,41 @@ class TestDirectoryItem(TestItem):
         # TODO
 
 
+#
+
+class DirectoryTest(unittest.TestCase):
+
+    path = '.'
+
+    def setUp(self):
+
+        # Create temporary directory with example files and change current
+        # working directory to it.
+        self.cwd = os.getcwd()
+        self.temp_path = tempfile.mkdtemp()
+        os.chdir(self.temp_path)
+        self.prepare_files()
+        self.item = Directory(self.path)
+
+    def prepare_files(self):
+
+        create_dir('x')
+        create_file(os.path.join('x', 'cat.txt'), data='meow')
+        create_file('dog.txt', data='wow')
+
+    def test_new_file(self):
+
+        create_file('new.file')
+
+
+
+        a = [(i.status, i.path) for i in self.item.poll()]
+        b = [(MODIFIED, os.path.abspath('.')),
+             (CREATED, os.path.abspath('new.file'))]
+
+        self.assertCountEqual(a, b)
+#
+    # TODO
 
 
 class BaseTest(unittest.TestCase):
