@@ -203,116 +203,33 @@ class ChildrenItemsInvestigator(Investigator):
 
 Event = namedtuple('Event', ['status', 'path', 'is_file'])
 
-# class Event:
-#
-#     def __init__(self, status, path, is_file):
-#         self.status = status
-#         self.path = path
-#         self.is_file = is_file
 
-
-# REMOVE HERE
-#
-# class BasePoller:
-#
-#     def on_create(self, item):
-#         pass
-#     def on_modify(self, item):
-#         pass
-#     def on_delete(self, item):
-#         pass
-#
-#
-#     def on_create_item(self, item):
-#         pass
-#     def on_modify_item(self, item):
-#         pass
-#     def on_delete_item(self, item):
-#         pass
-#
-# class FilePoller(BasePoller):
-#
-#     def __init__(self, item):
-#
-#         self.stats = item.stat
-#
-#     def poll(self, item):
-#
-#         # Check if a file is modified.
-#         stat_a = item.stat.st_mtime, item.stat.st_size
-#         stat_b = self.stats.st_mtime, self.stats.st_size
-#
-#         self.stats = item.stat
-#         return True if stat_a != stat_b else False
-#
-#     def on_create(self, item):
-#         self.stats = item.stat
-#
-# class PermissionsPoller(BasePoller):
-#     def __init__(self, item):
-#
-#         self.stats = item.stat
-#
-#     def poll(self, item):
-#
-#         # st_mode: File mode (permissions)
-#         # st_uid: Owner id.
-#         # st_gid: Group id.
-#         stat_a = item.stat.st_mode, item.stat.st_uid, item.stat.st_gid
-#         stat_b = self.stats.st_mode, self.stats.st_uid, self.stats.st_gid
-#
-#         self.stats = item.stat
-#         return True if stat_a != stat_b else False
-#
-#     def on_create(self, item):
-#         self.stats = item.stat
-#
-# class DirectoryItemsPoller(BasePoller):
-#
-#     def __init__(self, item):
-#
-#         self.dirs = None
-#         self.files = None
-#
-#         self.path = item.path
-#         self.on_create(item)
-#
-#     def on_create(self, item):
-#
-#         for path, dirs, files in os.walk(item.path):
-#             self.dirs = set(dirs)
-#             self.files = set(files)
-#             break
-#
-#     def poll(self, item):
-#
-#         for _, dirs, files in os.walk(item.path):
-#             if set(dirs) != self.dirs or set(files) != self.files:
-#                 self.dirs = set(dirs)
-#                 self.files = set(files)
-#                 return True
-#             break
-#         return False
-
-# TO HERE
-
+# ./x
+# root + ./x
 
 
 class ItemPoller:
 
-    def __init__(self, path, investigators=None):
+    def __init__(self, path, investigators=None, root=None):
 
         self.path = path
-        self._abspath = os.path.abspath(path)
 
-        self.stat = os.stat(path)
+        if root is None:
+            self._abspath = os.path.abspath(path)
+        else:
+            self._abspath = os.path.normpath(os.path.join(root, path))
 
+
+        print('NEW ITEM', self._abspath)
+
+        # print([i for i in os.walk(self._abspath)])
+        self.stat = os.stat(self._abspath)
         self.status = None
         self.is_file = None
 
         self.pollers = [i(self) for i in investigators] if investigators else None
 
-        # ItemPoller is directory.
+        # Polling directory.
 
         if S_ISDIR(self.stat.st_mode):
             self.is_file = False
@@ -320,13 +237,18 @@ class ItemPoller:
                 self.pollers = [PermissionsInvestigator(self),
                                 ChildrenItemsInvestigator(self)]
 
-        # ItemPoller is file.
+        # Polling file.
 
         else:
             self.is_file = True
             if investigators is None:
                 self.pollers = [FileInvestigator(self),
                                 PermissionsInvestigator(self)]
+
+    def __repr__(self):
+        return ("<{class_name}: path={path}>").format(
+            class_name=self.__class__.__name__,
+            path=self.path)
 
     def exists(self):
 
@@ -349,15 +271,6 @@ class ItemPoller:
             return self.update_status(DELETED)
 
         self.stat = stat
-
-        # x = False
-        # for i in self.pollers:
-        #     if i.poll(self):
-        #         x = True
-
-
-
-
 
 
         # ItemPoller was deleted, but it lives again!
@@ -453,66 +366,167 @@ class Directory:
     def __init__(self, path, recursive=False, filter=None):
 
         # Path must be always absolute!
-        self.path = path
-        self._abspath = os.path.abspath(path)
-        self.is_recursive = recursive
 
-        # Callable that checks ignored paths.
+        self.path = path
+        self.root = os.getcwd()
+        # root + path
+        self.full_path = os.path.join(self.root, path)
+
+        self.is_recursive = recursive
+        # Callable that checks ignored items_paths.
         self.filter = filter
 
-        # List of watched files, key is a file path, value is an ItemPoller instance.
-        self.items = []
-
-        for path in self._walk():
-
-            if path == self.path:
-                p = [ChildrenItemsInvestigator, PermissionsInvestigator]
-            else:
-                p = [PermissionsInvestigator] if os.path.isdir(path) else None
-            self.items.append(ItemPoller(path, investigators=p))
+        # List of PathPolling instances.
+        self.items = [self.new_item(path) for path in self._walk()]
 
     def __repr__(self):
-        args = self.__class__.__name__, self.path, self.is_recursive
-        return "{}(path={!r}, recursive={!r})".format(*args)
+
+        return ("<{{class_name}}: path={{path}}, "
+                "is_recursive={{is_recursive}}>").format(
+            class_name=self.__class__.__name__,
+            path=self.path,
+            is_recursive=self.is_recursive)
 
     @property
-    def paths(self):
+    def items_paths(self):
         return [i.path for i in self.items]
 
+    def new_item(self, path):
+
+        if os.path.isdir(path):
+            x = [PermissionsInvestigator]
+        else:
+            x = [FileInvestigator, PermissionsInvestigator]
+
+        return ItemPoller(path, root=self.root, investigators=x)
+
     def _walk(self):
-        """Yields watched paths (already filtered)."""
+        """Yields watched paths, already filtered."""
 
         yield self.path
 
-        for path, dirs, files in os.walk(self._abspath):
-            for i in dirs + files:
-                # p = os.path.join(path, i)
+        for root, dirs, files in os.walk(self.full_path):
+            for name in dirs + files:
 
+                # Path is generated using self.path attribute, to preserve
+                # arguments during calling __init__.
+                # For example: DirectoryPolling('.') => PathPolling('./filename)
 
-
-                x = os.path.relpath(path, self._abspath)
-                if x == '.':
-                    p = os.path.join(self.path, i)
+                if root == self.full_path:
+                    p = os.path.join(self.path, name)
                 else:
-                    p = os.path.join(self.path, i)
+                    p = os.path.join(self.path,
+                                     os.path.relpath(root, self.full_path),
+                                     name)
 
-                # p = os.path.relpath(os.path.join(path, i), self._abspath)
-                # p = i
-
-                print(x)
-                print(p)
-                # p = os.path.join()
                 if self.filter and not self.filter(p):
                     continue
                 yield p
+
             if not self.is_recursive:
                 break
 
+
+
+    def get_created_items(self):
+
+        for path in self._walk():
+            if path not in self.items_paths:
+
+                try:
+                    yield self.new_item(path)
+                # Path could be deleted during this method.
+                except (IOError, OSError):
+                    continue
+
+    def get_parent_item(self, item):
+
+        root = os.path.dirname(item.path)
+
+        for i in self.items:
+            if i.path == root:
+                return i
+
+
+
     def poll(self):
+
+        items_copy = self.items[:]
+
+        def modify_root(i):
+
+            root = os.path.dirname(i.path)
+            # if root in self.items_paths:
+
+            for x in items_copy:
+                if x.path == root:
+                    e = x.update_status(STATUS_MODIFIED)
+                    self.on_modified(e)
+                    return e
+
+                # e = Event(STATUS_MODIFIED, root, is_file=False)
+                # self.on_modified(e)
+                #
+                # if not e in x:
+                #     x.append(e)
 
         x = []
 
-        for i in self.items[:]:
+        for item in self.get_created_items():
+            event = item.update_status(STATUS_CREATED)
+            self.items.append(item)
+            self.on_created(event)
+            x.append(event)
+
+            parent = self.get_parent_item(item)
+            if parent:
+                event = parent.update_status(STATUS_MODIFIED)
+                self.on_modified(parent)
+
+                if not event in x:
+
+                    x.append(event)
+
+        # for path in self._walk():
+        #     if path not in self.items_paths:
+        #
+        #         try:
+        #             i = self.new_item(path)
+        #         # Path could be deleted during this method.
+        #         except (IOError, OSError):
+        #             continue
+        #
+        #         e = i.update_status(STATUS_CREATED)
+        #         self.items.append(i)
+        #         items_copy.append(i)
+        #         self.on_created(e)
+        #         x.append(e)
+        #
+        #         # Modify on parent dir
+        #
+        #
+        #
+        #         e = modify_root(i)
+        #         if e:
+        #             if not e in x:
+        #                 x.append(e)
+
+                # root = os.path.dirname(i.path)
+                # if root:
+                #
+                #     e = Event(STATUS_MODIFIED, root, is_file=False)
+                #     self.on_modified(e)
+                #
+                #     if not e in x:
+                #         x.append(e)
+
+
+
+        items_copy = self.items[:]
+
+        for i in items_copy:
+
+            # print(i.path)
 
             event = i.poll()
             if event:
@@ -521,27 +535,31 @@ class Directory:
                     x.append(event)
 
                 elif event.status == STATUS_DELETED:
+
+                    # Modify event on parent dir!
+                    print('DELETE')
+                    #
+                    e = modify_root(i)
+                    if e:
+                        if not e in x:
+                            x.append(e)
+
+                    print(self.items)
+
+                    # root = os.path.dirname(i.path)
+                    # if root:
+                    #
+                    #     e = Event(STATUS_MODIFIED, root, is_file=False)
+                    #     self.on_modified(e)
+                    #
+                    #     if not e in x:
+                    #         x.append(e)
+
                     self.items.remove(i)
                     self.on_deleted(event)
                     x.append(event)
 
-        for path in self._walk():
-            if path not in self.paths:
-                try:
-                    p = [PermissionsInvestigator] if os.path.isdir(path) else None
-                    i = ItemPoller(path, investigators=p)
 
-                # Path could be deleted during this method.
-                except (IOError, OSError):
-                    continue
-
-                # TODO: or update_status()?
-                i.status = CREATED
-                self.items.append(i)
-
-                e = Event(STATUS_CREATED, i.path, i.is_file)
-                self.on_created(e)
-                x.append(e)
 
         return x
 
@@ -624,7 +642,7 @@ class SimpleWatcher(BaseWatcher):
         return "{}(path={!r}, recursive={!r})".format(*args)
 
     def _filtered_paths(self, root, paths):
-        """Yields filtered paths using self.filter and skips deleted ones."""
+        """Yields filtered items_paths using self.filter and skips deleted ones."""
 
         for i in paths:
             if self.filter and not self.filter(os.path.join(root, i)):
@@ -640,7 +658,7 @@ class SimpleWatcher(BaseWatcher):
                 yield path, stats
 
     def _get_snapshot(self):
-        """Returns set with all paths in self.path location."""
+        """Returns set with all items_paths in self.path location."""
 
         snapshot = set()
 

@@ -56,7 +56,7 @@ def modify_file(path, data='update'):
 
 
 def absolute_paths(*paths):
-    """Returns paths converted to absolute paths."""
+    """Returns items_paths converted to absolute items_paths."""
     return [os.path.abspath(i) for i in paths]
 
 
@@ -524,13 +524,28 @@ class TestDirectoryPathPolling:
 @pytest.mark.usefixtures("tmp_dir", "test_dir")
 class TestDirectoryPolling:
 
+    def test_repr(self):
+
+        assert repr(DirectoryPolling('.'))
+
+
+    def test_init(self):
+
+        p = DirectoryPolling('.')
+
+        paths = [i.path for i in p.items]
+
+        assert '.' in paths
+        assert './dog.txt' in paths
+        assert './dir' in paths
+
     # Create
 
     def test_create_root(self):
         # TODO
         pass
 
-    def test_create(self):
+    def test_create_items(self):
 
         p = DirectoryPolling('.')
         with open('new_file', 'w'):
@@ -539,43 +554,20 @@ class TestDirectoryPolling:
 
         e = p.poll()
         assert len(e) == 3
-        assert Event(STATUS_MODIFIED, '.', is_file=False) in e
-        assert Event(STATUS_CREATED, './new_file', is_file=True) in e
-        assert Event(STATUS_CREATED, './new_dir', is_file=False) in e
+        assert Event(STATUS_MODIFIED, '.',
+                     is_file=False) in e
+        assert Event(STATUS_CREATED, os.path.join('.', 'new_file'),
+                     is_file=True) in e
+        assert Event(STATUS_CREATED, os.path.join('.', 'new_dir'),
+                     is_file=False) in e
 
-
-    def test_create_file(self):
-
-        p = DirectoryPolling('.')
-        with open('new_file', 'w'):
-            pass
-        e = p.poll()
-
-        assert len(e) == 2
-        assert Event(STATUS_MODIFIED, '.', is_file=False) in e
-        assert Event(STATUS_CREATED, './new_file', is_file=True) in e
-
-    def test_create_deep_file(self):
+    def test_create_deep_items(self):
 
         p = DirectoryPolling('.')
         with open(os.path.join('dir', 'new_file'), 'w'):
             pass
-        assert not p.poll()
-
-    def test_create_directory(self):
-
-        p = DirectoryPolling('.')
-        os.mkdir('new_dir')
-        e = p.poll()
-
-        assert len(e) == 2
-        assert Event(STATUS_MODIFIED, '.', is_file=False) in e
-        assert Event(STATUS_CREATED, './new_dir', is_file=False) in e
-
-    def test_create_deep_directory(self):
-
-        p = DirectoryPolling('.')
         os.mkdir(os.path.join('dir', 'new_dir'))
+
         assert not p.poll()
 
     # Delete
@@ -586,71 +578,58 @@ class TestDirectoryPolling:
         shutil.rmtree('dir')
 
         e = p.poll()
-        assert len(e) == 4
-        # TODO
+        assert len(e) == 5
+        assert Event(STATUS_DELETED, os.path.join('dir', 'dir'),
+                     is_file=False) in e
+        assert Event(STATUS_DELETED, os.path.join('dir', 'dog.txt'),
+                     is_file=True) in e
+        assert Event(STATUS_DELETED, os.path.join('dir', 'cat.txt'),
+                     is_file=True) in e
+        assert Event(STATUS_MODIFIED, 'dir', is_file=False) in e
         assert Event(STATUS_DELETED, 'dir', is_file=False) in e
-        assert Event(STATUS_DELETED, 'dir/dog.txt', is_file=True) in e
-        assert Event(STATUS_DELETED, 'dir/cat.txt', is_file=True) in e
-        assert Event(STATUS_DELETED, 'dir/dir', is_file=False) in e
 
-    def test_delete_file(self):
+    def test_delete_items(self):
 
         p = DirectoryPolling('.')
         os.remove('dog.txt')
+        shutil.rmtree('dir')
+
         e = p.poll()
+        assert len(e) == 3
+        assert Event(STATUS_MODIFIED, '.',
+                     is_file=False) in e
+        assert Event(STATUS_DELETED, os.path.join('.', 'dog.txt'),
+                     is_file=True) in e
+        assert Event(STATUS_DELETED, os.path.join('.', 'dir'),
+                     is_file=False) in e
 
-        assert len(e) == 2
-        assert Event(STATUS_MODIFIED, '.', is_file=False) in e
-        assert Event(STATUS_DELETED, './dog.txt', is_file=True) in e
-
-    def test_delete_deep_file(self):
+    def test_delete_deep_items(self):
 
         p = DirectoryPolling('.')
         os.remove(os.path.join('dir', 'dog.txt'))
-        assert not p.poll()
-
-    def test_delete_directory(self):
-
-        p = DirectoryPolling('.')
-        shutil.rmtree('dir')
-        e = p.poll()
-
-        assert len(e) == 2
-        assert Event(STATUS_MODIFIED, '.', is_file=False) in e
-        assert Event(STATUS_DELETED, './dir', is_file=False) in e
-
-    def test_delete_deep_directory(self):
-
-        p = DirectoryPolling('.')
         shutil.rmtree(os.path.join('dir', 'dir'))
+
         assert not p.poll()
 
     # Permissions
 
-    def test_change_file_permissions(self):
+    def test_change_item_permissions(self):
 
         p = DirectoryPolling('.')
+
         os.chmod('dog.txt', stat.S_IREAD) if SYSTEM_WINDOWS else os.chmod('dog.txt', 0o777)
+        os.chmod('dir', stat.S_IREAD) if SYSTEM_WINDOWS else os.chmod('dir', 0o777)
 
         e = p.poll()
-        assert len(e) == 1
-        assert Event(STATUS_MODIFIED, './dog.txt', is_file=True) in e
+        assert len(e) == 2
+        assert Event(STATUS_MODIFIED, os.path.join('.', 'dog.txt'),
+                     is_file=True) in e
+        assert Event(STATUS_MODIFIED, os.path.join('.', 'dir'),
+                     is_file=False) in e
 
         if SYSTEM_WINDOWS:
             # Prevent PermissionError!
             os.chmod('dog.txt', stat.S_IWRITE)
-
-    def test_change_directory_permissions(self):
-
-        p = DirectoryPolling('.')
-        os.chmod('dir', stat.S_IREAD) if SYSTEM_WINDOWS else os.chmod('dir', 0o777)
-
-        e = p.poll()
-        assert len(e) == 1
-        assert Event(STATUS_MODIFIED, './dir', is_file=False) in e
-
-        if SYSTEM_WINDOWS:
-            # Prevent PermissionError!
             os.chmod('dir', stat.S_IWRITE)
 
     def test_change_root_permissions(self):
@@ -672,22 +651,26 @@ class TestDirectoryPolling:
 
         p = DirectoryPolling('.')
         os.rename('dog.txt', 'renamed')
-        e = p.poll()
 
+        e = p.poll()
         assert len(e) == 3
-        assert Event(STATUS_DELETED, './dog.txt', is_file=True) in e
-        assert Event(STATUS_CREATED, './renamed', is_file=True) in e
+        assert Event(STATUS_DELETED, os.path.join('.', 'dog.txt'),
+                     is_file=True) in e
+        assert Event(STATUS_CREATED, os.path.join('.', 'renamed'),
+                     is_file=True) in e
         assert Event(STATUS_MODIFIED, '.', is_file=False) in e
 
     def test_rename_directory(self):
 
         p = DirectoryPolling('.')
         os.rename('dir', 'renamed')
-        e = p.poll()
 
+        e = p.poll()
         assert len(e) == 3
-        assert Event(STATUS_DELETED, './dir', is_file=False) in e
-        assert Event(STATUS_CREATED, './renamed', is_file=False) in e
+        assert Event(STATUS_DELETED, os.path.join('.', 'dir'),
+                     is_file=False) in e
+        assert Event(STATUS_CREATED,  os.path.join('.', 'renamed'),
+                     is_file=False) in e
         assert Event(STATUS_MODIFIED, '.', is_file=False) in e
 
     def test_rename_root(self):
@@ -701,17 +684,163 @@ class TestDirectoryPolling:
         p = DirectoryPolling('.')
         with open('dog.txt', 'a') as f:
             f.write('update')
-        e = p.poll()
 
+        e = p.poll()
         assert len(e) == 1
-        assert Event(STATUS_MODIFIED, './dog.txt', is_file=True) in e
+        assert Event(STATUS_MODIFIED, os.path.join('.', 'dog.txt'),
+                     is_file=True) in e
 
     def test_modify_deep_file(self):
 
         p = DirectoryPolling('.')
         with open(os.path.join('dir', 'dog.txt'), 'a') as f:
             f.write('update')
+
         assert not p.poll()
+
+
+@pytest.mark.usefixtures("tmp_dir", "test_dir")
+class TestRecursiveDirectoryPolling:
+
+
+    # dog.txt
+    # dir/cat.txt
+    # dir/dog.txt
+    # dir/dir/dog.txt
+
+    # Create
+
+    def test_create_root(self):
+
+        p = DirectoryPolling('dir', recursive=True)
+        shutil.rmtree('dir')
+        p.poll()
+
+        os.mkdir('dir')
+        create_file(os.path.join('dir', 'new_file'))
+
+        e = p.poll()
+        assert len(e) == 3
+
+        assert Event(STATUS_CREATED, 'dir', is_file=False) in e
+        assert Event(STATUS_CREATED, os.path.join('dir', 'new_file'),
+                     is_file=True) in e
+        assert Event(STATUS_MODIFIED, 'dir', is_file=False) in e
+
+
+    def test_create_items(self):
+
+        p = DirectoryPolling('.', recursive=True)
+        create_file('new_file')
+        os.mkdir('new_dir')
+
+        e = p.poll()
+        assert len(e) == 3
+
+        assert Event(STATUS_CREATED, os.path.join('.', 'new_file'),
+                     is_file=True) in e
+        assert Event(STATUS_CREATED, os.path.join('.', 'new_dir'),
+                     is_file=False) in e
+        assert Event(STATUS_MODIFIED, '.', is_file=False) in e
+
+        assert not p.poll()
+
+    def test_create_deep_items(self):
+
+        p = DirectoryPolling('.', recursive=True)
+
+        os.chdir('dir')
+        create_file('new_file')
+        os.mkdir('new_dir')
+        create_file(os.path.join('new_dir', 'new_file'))
+
+        e = p.poll()
+        assert len(e) == 5
+
+        assert Event(STATUS_CREATED, os.path.join('.', 'dir', 'new_file'),
+                     is_file=True) in e
+        assert Event(STATUS_CREATED, os.path.join('.', 'dir', 'new_dir'),
+                     is_file=False) in e
+        assert Event(STATUS_MODIFIED, os.path.join('.', 'dir'),
+                     is_file=False) in e
+        assert Event(STATUS_CREATED, os.path.join('.', 'dir', 'new_dir', 'new_file'),
+                     is_file=True) in e
+        assert Event(STATUS_MODIFIED, os.path.join('.', 'dir', 'new_dir'),
+                     is_file=False) in e
+
+    # Delete
+
+    def test_delete_root(self):
+
+        p = DirectoryPolling('dir', recursive=True)
+        shutil.rmtree('dir')
+
+        e = p.poll()
+        assert len(e) == 7
+
+        # dir/dir
+        assert Event(STATUS_DELETED, os.path.join('dir', 'dir', 'dog.txt'),
+                     is_file=True) in e
+        assert Event(STATUS_MODIFIED, os.path.join('dir', 'dir'),
+                     is_file=False) in e
+        # dir
+        assert Event(STATUS_DELETED, os.path.join('dir', 'dog.txt'),
+                     is_file=True) in e
+        assert Event(STATUS_DELETED, os.path.join('dir', 'cat.txt'),
+                     is_file=True) in e
+        assert Event(STATUS_DELETED, os.path.join('dir', 'dir'),
+                     is_file=False) in e
+        assert Event(STATUS_MODIFIED, 'dir', is_file=False) in e
+        # root
+        assert Event(STATUS_DELETED, 'dir', is_file=False) in e
+
+    def test_delete_items(self):
+
+        p = DirectoryPolling('.', recursive=True)
+        os.remove('dog.txt')
+        shutil.rmtree('dir')
+
+        e = p.poll()
+        assert len(e) == 9
+
+        assert Event(STATUS_DELETED, os.path.join('.', 'dir', 'dir', 'dog.txt'),
+                     is_file=True) in e
+        assert Event(STATUS_MODIFIED, os.path.join('.', 'dir', 'dir'),
+                     is_file=False) in e
+        assert Event(STATUS_DELETED, os.path.join('.', 'dir', 'dir'),
+                     is_file=False) in e
+        assert Event(STATUS_DELETED, os.path.join('.', 'dir', 'cat.txt'),
+                     is_file=True) in e
+        assert Event(STATUS_DELETED, os.path.join('.', 'dir', 'dog.txt'),
+                     is_file=True) in e
+        assert Event(STATUS_MODIFIED, os.path.join('.', 'dir'),
+                     is_file=False) in e
+        assert Event(STATUS_DELETED, os.path.join('.', 'dog.txt'),
+                     is_file=True) in e
+        assert Event(STATUS_DELETED, os.path.join('.', 'dir'),
+                     is_file=False) in e
+        assert Event(STATUS_MODIFIED, '.', is_file=False) in e
+
+    def test_delete_deep_items(self):
+
+        p = DirectoryPolling('.', recursive=True)
+        os.remove(os.path.join('dir', 'dog.txt'))
+        shutil.rmtree(os.path.join('dir', 'dir'))
+
+        e = p.poll()
+        assert len(e) == 5
+
+        assert Event(STATUS_DELETED, os.path.join('.', 'dir', 'dir', 'dog.txt'),
+                     is_file=True) in e
+        assert Event(STATUS_MODIFIED, os.path.join('.', 'dir', 'dir'),
+                     is_file=False) in e
+        assert Event(STATUS_DELETED, os.path.join('.', 'dir', 'dog.txt'),
+                     is_file=True) in e
+        assert Event(STATUS_DELETED, os.path.join('.', 'dir', 'dir'),
+                     is_file=False) in e
+        assert Event(STATUS_MODIFIED, os.path.join('.', 'dir'),
+                     is_file=False) in e
+
 
 
 
@@ -837,7 +966,7 @@ class BaseTest:
         self.assertTrue(x.check())
 
     def test_filter(self):
-        """Can use a filter to ignore paths."""
+        """Can use a filter to ignore items_paths."""
 
         x = self.class_(CHECK_INTERVAL, filter=lambda path: path.endswith('.txt'),
                         **self.kwargs)
