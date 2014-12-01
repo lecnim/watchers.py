@@ -12,40 +12,44 @@ import tempfile
 import timeit
 import time
 import platform
+import pytest
 
 import watchers
-from watchers import Watcher, SimpleWatcher, Manager, DELETED, CREATED, MODIFIED, Item, Directory
+from watchers import Watcher, Event, PYTHON32, DirectoryPolling, FilePolling, FileWatcher, SimpleWatcher, Manager, DELETED, CREATED, MODIFIED, ItemPoller, Directory, STATUS_CREATED, STATUS_DELETED, STATUS_MODIFIED
 
 # For faster testing.
 CHECK_INTERVAL = 0.25
 
+SYSTEM_WINDOWS = True if platform.system().lower() == 'Windows' else False
+
 # Shortcuts.
 
-def create_file(*path, data='hello world!'):
-    """Creates a new file with a given data."""
-    with open(os.path.join(*path), 'w') as file:
-        file.write(data)
+def create_file(path, data='hello world!'):
+    """Creates a new file that contains given data."""
+
+    with open(os.path.join(*path.split('/')), 'w') as f:
+        f.write(data)
 
 
-def create_dir(*path):
+def create_dir(path):
     """Creates a new directory."""
-    os.mkdir(os.path.join(*path))
+    os.mkdir(os.path.join(*path.split('/')))
 
 
-def delete_file(*path):
+def delete_file(path):
     """Removes a file."""
-    os.remove(os.path.join(*path))
+    os.remove(os.path.join(*path.split('/')))
 
 
-def delete_dir(*path):
+def delete_dir(path):
     """Removes a directory."""
-    shutil.rmtree(os.path.join(*path))
+    shutil.rmtree(os.path.join(*path.split('/')))
 
 
-def modify_file(*path):
+def modify_file(path, data='update'):
     """Modifies a file data - appends 'hello'."""
-    with open(os.path.join(*path), 'a') as file:
-        file.write('hello')
+    with open(os.path.join(*path.split('/')), 'a') as file:
+        file.write(data)
 
 
 
@@ -83,415 +87,638 @@ def create_test_files():
     return path
 
 
-# Tests.
+# Fixtures
 
-class TestItem(unittest.TestCase):
+@pytest.fixture()
+def tmp_dir(request):
 
-    path = 'a'
+    cwd = os.getcwd()
+    tmp = tempfile.mkdtemp()
+    os.chdir(tmp)
 
-    def setUp(self):
+    def fin():
+        os.chdir(cwd)
+        shutil.rmtree(tmp)
 
-        # Create temporary directory with example files and change current
-        # working directory to it.
-        self.cwd = os.getcwd()
-        self.temp_path = tempfile.mkdtemp()
-        os.chdir(self.temp_path)
-        self.prepare_files()
-        self.item = Item(self.path)
-
-    def prepare_files(self):
-        pass
-
-    # Tests:
-
-    def test_poll(self, status=None):
-
-        if status is None:
-
-            if self.item.status is DELETED:
-                self.assertEqual(self.item.poll(), None)
-                self.assertEqual(self.item.status, DELETED)
-                self.assertEqual(self.item.stat, None)
-
-            else:
-                self.assertEqual(self.item.poll(), None)
-                self.assertEqual(self.item.status, None)
-                self.assertEqual(self.item.stat, os.stat(self.item.path))
-
-        elif status == MODIFIED:
-
-            self.assertEqual(self.item.poll(), MODIFIED)
-            self.assertEqual(self.item.status, MODIFIED)
-            self.assertEqual(self.item.stat, os.stat(self.item.path))
-
-        elif status == DELETED:
-
-            self.assertEqual(self.item.poll(), DELETED)
-            self.assertEqual(self.item.status, DELETED)
-            self.assertEqual(self.item.stat, None)
-
-        elif status == CREATED:
-
-            self.assertEqual(self.item.poll(), CREATED)
-            self.assertEqual(self.item.status, CREATED)
-            self.assertEqual(self.item.stat, os.stat(self.item.path))
-
-    def test_not_found(self):
-        self.assertRaises((IOError, OSError), Item, 'path/not/found')
+    request.addfinalizer(fin)
 
 
-class TestFileItem(TestItem):
+@pytest.fixture()
+def file_item(request):
 
-    path = 'a.txt'
+    with open('dog.txt', 'w') as f:
+        f.write('wow')
+    return ItemPoller('dog.txt')
 
-    def prepare_files(self):
-        create_file('a.txt')
 
-    # Tests:
+@pytest.fixture()
+def dir_item(request):
 
-    def test_init(self):
+    os.mkdir('dog')
+    with open(os.path.join('dog', 'dog.txt'), 'w') as f:
+        f.write('wow')
+    os.mkdir(os.path.join('dog', 'dir'))
 
-        self.assertEqual(self.item.status, None)
-        self.assertEqual(self.item.path, os.path.abspath('a.txt'))
-        self.assertEqual(self.item.is_file, True)
-        self.assertEqual(self.item.stat, os.stat('a.txt'))
+    return ItemPoller('dog')
 
-    def test_modify(self):
+@pytest.fixture(params=['file', 'dir'])
+def item(request):
 
-        modify_file('a.txt')
-        self.test_poll(MODIFIED)
-        self.test_poll(None)
+    with open('file', 'w') as f:
+        f.write('wow')
+    os.mkdir('dir')
 
-    def test_delete(self):
+    return ItemPoller(request.param)
 
-        delete_file('a.txt')
-        self.test_poll(DELETED)
-        self.test_poll(None)
+@pytest.fixture()
+def test_dir():
 
-    def test_create(self):
+    # dog.txt
+    # dir/cat.txt
+    # dir/dog.txt
+    # dir/dir/dog.txt
 
-        delete_file('a.txt')
-        self.test_poll(DELETED)
-        create_file('a.txt', data='i live again')
-        self.test_poll(CREATED)
-        self.test_poll(None)
+    # file
+    # dir/file.txt
+    # dir/file
 
-    def test_move(self):
 
-        create_dir('x')
-        shutil.move('a.txt', 'x')
-        self.test_poll(DELETED)
-        self.test_poll(None)
+    with open('dog.txt', 'w') as f:
+        f.write('wow')
 
-    def test_recreate(self):
+    os.mkdir('dir')
+    os.mkdir(os.path.join('dir', 'dir'))
+
+    with open(os.path.join('dir', 'cat.txt'), 'w') as f:
+        f.write('meow')
+    with open(os.path.join('dir', 'dog.txt'), 'w') as f:
+        f.write('wow')
+    with open(os.path.join('dir', 'dir', 'dog.txt'), 'w') as f:
+        f.write('wow')
+
+# Item tests:
+
+@pytest.mark.usefixtures("tmp_dir")
+class TestPathPolling:
+
+    def test_repr(self, item):
+        print(item)
+
+    def test_path_not_found(self):
+
+        if PYTHON32:
+            e = OSError
+        else:
+            e = FileNotFoundError
+
+        with pytest.raises(e):
+            ItemPoller('not_found')
+
+    def test_move(self, item):
+
+        os.mkdir('x')
+        shutil.move(item.path, 'x')
+
+        assert item.poll().status == STATUS_DELETED
+
+    def test_rename(self, item):
+        """User renames an item and poll()"""
+
+        os.rename(item.path, 'b')
+        assert item.poll().status == STATUS_DELETED
+
+        os.rename('b', item.path)
+        assert item.poll().status == STATUS_CREATED
+
+        os.rename(item.path, 'b')
+        time.sleep(0.5)
+        os.rename('b', item.path)
+        assert item.poll() is None
+
+    def test_cwd(self, item):
+        """User modifies an item, change current working directory and poll()"""
+
+        os.mkdir('new_dir')
+        os.chmod(item.path, 0o777)
+        os.chdir('new_dir')
+
+        assert item.poll().status == STATUS_MODIFIED
+
+    def test_permissions(self, item):
+        """User changes an item permissions and poll()"""
+
+        if SYSTEM_WINDOWS:
+            # File with read-only attribute.
+            os.chmod(item.path, stat.S_IREAD)
+            assert item.poll().status == STATUS_MODIFIED
+            # Prevent PermissionError!
+            os.chmod(item.path, stat.S_IWRITE)
+
+        else:
+            os.chmod(item.path, 0o777)
+            assert item.poll().status == STATUS_MODIFIED
+
+
+
+@pytest.mark.usefixtures("tmp_dir")
+class TestFilePathPolling:
+
+    def test_poll_modify(self, file_item):
+
+        with open(file_item.path, 'a') as f:
+            f.write('edited')
+
+        e = file_item.poll()
+
+        assert isinstance(e, Event)
+        assert e.status == STATUS_MODIFIED
+        assert e.path == 'dog.txt'
+        assert e.is_file is True
+        assert file_item.poll() is None
+
+    def test_poll_create(self, file_item):
+
+        os.remove(file_item.path)
+        file_item.poll()
+
+        with open(file_item.path, 'w') as f:
+            f.write('created')
+
+        e = file_item.poll()
+
+        assert isinstance(e, Event)
+        assert e.status == STATUS_CREATED
+        assert e.path == 'dog.txt'
+        assert e.is_file is True
+        assert file_item.poll() is None
+
+    def test_poll_delete(self, file_item):
+
+        os.remove(file_item.path)
+
+        e = file_item.poll()
+
+        assert isinstance(e, Event)
+        assert e.status == STATUS_DELETED
+        assert e.path == 'dog.txt'
+        assert e.is_file is True
+        assert file_item.poll() is None
+
+    def test_recreate(self, file_item):
 
         # Recreating same file - mod time should be different.
 
-        delete_file('a.txt')
+        os.remove(file_item.path)
         time.sleep(0.5)
-        create_file('a.txt')
-        self.test_poll(MODIFIED)
-        self.test_poll(None)
+        with open(file_item.path, 'w') as f:
+            f.write('wow')
+
+        assert file_item.poll().status == STATUS_MODIFIED
 
         # Recreating same file with different content - size file is used.
 
-        delete_file('a.txt')
-        create_file('a.txt', data='dog')
-        self.test_poll(MODIFIED)
-        self.test_poll(None)
+        os.remove(file_item.path)
+        with open(file_item.path, 'w') as f:
+            f.write('meow')
 
-    def test_swap_with_directory(self):
+        assert file_item.poll().status == STATUS_MODIFIED
 
-        delete_file('a.txt')
-        create_dir('a.txt')
-        self.test_poll(DELETED)
-        self.test_poll(None)
+    def test_swap_with_directory(self, file_item):
 
-    def test_rename(self):
+        os.remove(file_item.path)
+        os.mkdir(file_item.path)
 
-        os.rename('a.txt', 'b.txt')
-        self.test_poll(DELETED)
+        assert file_item.poll().status == STATUS_DELETED
 
-        os.rename('b.txt', 'a.txt')
-        self.test_poll(CREATED)
+    # Events
 
-        os.rename('a.txt', 'b.txt')
-        time.sleep(0.5)
-        os.rename('b.txt', 'a.txt')
-        self.test_poll(None)
+    def test_on_create(self, file_item):
 
-    def test_cwd(self):
+        def on_create(e):
+            assert isinstance(e, Event)
+            assert e.status == STATUS_CREATED
+            assert e.path == file_item.path
+            assert e.is_file is True
+            file_item.called = True
+        file_item.on_create = on_create
 
-        create_dir('dir')
-        x = Item('a.txt')
-        modify_file('a.txt')
-        os.chdir('dir')
-        self.assertEqual(MODIFIED, x.poll())
+        os.remove(file_item.path)
+        file_item.poll()
+        with open(file_item.path, 'w') as f:
+            f.write('created')
+        file_item.poll()
+
+        assert file_item.called
+
+    def test_on_modify(self, file_item):
+
+        def on_modify(e):
+            assert isinstance(e, Event)
+            assert e.status == STATUS_MODIFIED
+            assert e.path == file_item.path
+            assert e.is_file is True
+            file_item.called = True
+        file_item.on_modify = on_modify
+
+        with open(file_item.path, 'a') as f:
+            f.write('edited')
+        file_item.poll()
+
+        assert file_item.called
+
+    def test_on_delete(self, file_item):
+
+        def on_delete(e):
+            assert isinstance(e, Event)
+            assert e.status == STATUS_DELETED
+            assert e.path == file_item.path
+            assert e.is_file is True
+            file_item.called = True
+        file_item.on_delete = on_delete
+
+        os.remove(file_item.path)
+        file_item.poll()
+
+        assert file_item.called
 
 
-class TestDirectoryItem(TestItem):
 
-    path = 'a'
+@pytest.mark.usefixtures("tmp_dir")
+class TestDirectoryPathPolling:
 
-    def prepare_files(self):
-        create_dir('a')
-        create_file('a', 'cat.txt')
-        create_dir('a', 'b')
-        create_dir('a', 'dir')
+    def test_poll_create(self, dir_item):
+        """User deletes a directory, recreates it and poll()"""
 
-    # Tests:
+        shutil.rmtree(dir_item.path)
+        dir_item.poll()
+        os.mkdir(dir_item.path)
 
-    def test_init(self):
-        """Test instance attributes"""
+        e = dir_item.poll()
 
-        self.assertEqual(self.item.status, None)
-        self.assertEqual(self.item.path, os.path.abspath('a'))
-        self.assertEqual(self.item.is_file, False)
-        self.assertEqual(self.item.stat, os.stat('a'))
+        assert isinstance(e, Event)
+        assert e.status == STATUS_CREATED
+        assert e.path == 'dog'
+        assert e.is_file is False
+        assert dir_item.poll() is None
 
-    def test_delete(self):
-        """Delete directory"""
+    def test_poll_delete(self, dir_item):
+        """User deletes a directory and poll()"""
 
-        delete_dir('a')
-        self.test_poll(DELETED)
-        self.test_poll(None)
+        shutil.rmtree(dir_item.path)
 
-    def test_create(self):
-        """Create directory"""
+        e = dir_item.poll()
 
-        delete_dir('a')
-        self.test_poll(DELETED)
-        create_dir('a')
-        self.test_poll(CREATED)
-        self.test_poll(None)
+        assert isinstance(e, Event)
+        assert e.status == STATUS_DELETED
+        assert e.path == 'dog'
+        assert e.is_file is False
+        assert dir_item.poll() is None
 
-    def test_move(self):
-        """Move directory"""
-
-        create_dir('x')
-        shutil.move('a', os.path.join('x'))
-        self.test_poll(DELETED)
-
-    def test_recreate(self):
-        """Delete directory and then create it again"""
+    def test_recreate(self, dir_item):
+        """User deletes a directory and then creates it again but with
+        different content and poll()"""
 
         # Recreating same directory but with different content.
 
-        delete_dir('a')
+        shutil.rmtree(dir_item.path)
         time.sleep(0.2)
-        create_dir('a')
-        self.test_poll(MODIFIED)
-        self.test_poll(None)
+        os.mkdir(dir_item.path)
+        with open(os.path.join(dir_item.path, 'test.txt'), 'w'):
+            pass
 
-        # Recreating same file - mod time should be different,
+        e = dir_item.poll()
+        assert e.status == STATUS_MODIFIED
+
+        # Recreating with sames files - mod time should be different,
         # but files structure does not change.
 
         time.sleep(0.2)
-        delete_dir('a')
-        create_dir('a')
+        shutil.rmtree(dir_item.path)
+        os.mkdir(dir_item.path)
+        with open(os.path.join(dir_item.path, 'test.txt'), 'w'):
+            pass
 
-        self.test_poll(None)
+        assert dir_item.poll() is None
 
-    def test_swap_with_file(self):
-        """Delete directory and create file instead"""
+    def test_swap_with_file(self, dir_item):
+        """User deletes a directory and creates a file instead and poll()"""
 
-        delete_dir('a')
-        create_file('a')
-        self.test_poll(DELETED)
+        shutil.rmtree(dir_item.path)
+        open(os.path.join(dir_item.path), 'w').close()
 
-    def test_rename(self):
-        """Rename directory"""
-
-        os.rename('a', 'b')
-        self.test_poll(DELETED)
-
-        os.rename('b', 'a')
-        self.test_poll(CREATED)
-
-        os.rename('a', 'b')
-        time.sleep(0.5)
-        os.rename('b', 'a')
-        self.test_poll(None)
-
-    def test_cwd(self):
-        """Item should works correctly when user change the working directory"""
-
-        x = Item('a')
-        create_dir('a', 'x')
-        os.chdir('a')
-        self.assertEqual(MODIFIED, x.poll())
-
-    def test_permissions(self):
-        """Permissions change"""
-
-        # Windows supports read-only flag only!
-        if platform.system() == 'Windows':
-
-            # File with read-only attribute.
-            os.chmod('a', stat.S_IREAD)
-            self.test_poll(MODIFIED)
-            # Prevent PermissionError!
-            os.chmod('a', stat.S_IWRITE)
-
-        else:
-            # Directory permissions.
-
-            os.chmod('a', 0o777)
-            self.test_poll(MODIFIED)
+        assert dir_item.poll().status is STATUS_DELETED
 
     # Changes in directory content.
 
-    def test_create_content(self):
-        """New item in directory"""
+    def test_create_directory_in_content(self, dir_item):
+        """User creates a new directory in directory and poll()"""
 
-        # File
+        os.mkdir(os.path.join(dir_item.path, 'new_dir'))
 
-        create_file('a', 'new.file')
-        self.test_poll(MODIFIED)
-        self.test_poll(None)
+        assert dir_item.poll().status == STATUS_MODIFIED
+        assert dir_item.poll() is None
 
-        # Directory.
+    def test_create_file_in_content(self, dir_item):
+        """User creates a new file in directory and poll()"""
 
-        create_dir('a', 'newdir')
-        self.test_poll(MODIFIED)
-        self.test_poll(None)
+        with open(os.path.join(dir_item.path, 'cat.txt'), 'w'):
+            pass
 
-    def test_modify_content(self):
-        """Modify item in directory"""
+        assert dir_item.poll().status == STATUS_MODIFIED
+        assert dir_item.poll() is None
 
-        time.sleep(0.1)
-        modify_file('a', 'cat.txt')
-        self.test_poll(None)
+    def test_modify_file_in_content(self, dir_item):
+        """User modifies a file from directory and poll()"""
 
-    def test_delete_content(self):
-        """Remove item from directory"""
+        time.sleep(0.2)
+        with open(os.path.join(dir_item.path, 'dog.txt'), 'a') as f:
+            f.write('update')
+        assert dir_item.poll() is None
 
-        # File
+    def test_delete_file_from_content(self, dir_item):
+        os.remove(os.path.join(dir_item.path, 'dog.txt'))
 
-        delete_file('a', 'cat.txt')
-        self.test_poll(MODIFIED)
-        self.test_poll(None)
+        assert dir_item.poll().status == STATUS_MODIFIED
+        assert dir_item.poll() is None
 
-        # Directory
+    def test_delete_directory_from_content(self, dir_item):
+        os.rmdir(os.path.join(dir_item.path, 'dir'))
 
-        delete_dir('a', 'dir')
-        self.test_poll(MODIFIED)
-        self.test_poll(None)
+        assert dir_item.poll().status == STATUS_MODIFIED
+        assert dir_item.poll() is None
 
-    def test_overwrite_content(self):
-        """Overwrite item in directory"""
+    def test_overwrite_file_in_content(self, dir_item):
 
-        # File
         # Treat as a modify of file, so nothing changed.
 
         time.sleep(0.2)
-        delete_file('a', 'cat.txt')
-        create_file('a', 'cat.txt')
 
-        self.test_poll(None)
+        os.remove(os.path.join(dir_item.path, 'dog.txt'))
+        with open(os.path.join(dir_item.path, 'dog.txt'), 'w') as f:
+            f.write('wow wow wow')
 
-        # Directory
+        assert dir_item.poll() is None
+
+    def test_overwrite_directory_in_content(self, dir_item):
+
         # Treat as modify of directory, so nothing changed.
 
         time.sleep(0.2)
-        delete_dir('a', 'dir')
-        create_dir('a', 'dir')
-        create_file('a', 'dir', 'new.file')
+        os.rmdir(os.path.join(dir_item.path, 'dir'))
+        os.mkdir(os.path.join(dir_item.path, 'dir'))
+        with open(os.path.join(dir_item.path, 'dir', 'dog.txt'), 'w') as f:
+            f.write('wow')
 
-        self.test_poll(None)
+        assert dir_item.poll() is None
 
-    def test_rename_content(self):
-        """Rename item in directory"""
+    def test_rename_file_in_content(self, dir_item):
 
-        # File
+        os.rename(os.path.join(dir_item.path, 'dog.txt'), 'renamed_dog.txt')
+        assert dir_item.poll().status == STATUS_MODIFIED
 
-        os.rename(os.path.join('a', 'cat.txt'), 'dog.txt')
-        self.test_poll(MODIFIED)
-        self.test_poll(None)
+    def test_rename_directory_in_content(self, dir_item):
 
-        # Directory
+        os.rename(os.path.join(dir_item.path, 'dir'), 'renamed_dir')
+        assert dir_item.poll().status == STATUS_MODIFIED
 
-        os.rename(os.path.join('a', 'dir'), 'hello')
-        self.test_poll(MODIFIED)
-        self.test_poll(None)
-
-    def test_swap_content(self):
+    def test_swap_content_items(self, dir_item):
         """Remove file from directory and create new directory instead"""
 
-        delete_file('a', 'cat.txt')
-        create_dir('a', 'cat.txt')
+        os.remove(os.path.join(dir_item.path, 'dog.txt'))
+        os.mkdir(os.path.join(dir_item.path, 'dog.txt'))
 
-        self.test_poll(MODIFIED)
-        self.test_poll(None)
+        assert dir_item.poll().status == STATUS_MODIFIED
 
-    def test_create_symlink_in_content(self):
-        """Create symlinks in directory"""
+    def test_symlink_to_directory(self, dir_item):
 
-        # Symlink to file.
+        p = os.path.abspath('new_dir')
+        os.mkdir(p)
 
-        create_file('test.txt')
-        os.chdir('a')
-        os.symlink('test.txt', 'link')
-        os.chdir(self.temp_path)
-
-        self.test_poll(MODIFIED)
-        self.test_poll(None)
-
-        # Symlink to directory.
-
-        create_dir('dog')
-        p = os.path.abspath('dog')
-        os.chdir('a')
-        os.unlink('link')
+        os.chdir(dir_item.path)
         os.symlink(p, 'link')
-        os.chdir(self.temp_path)
 
-        self.test_poll(MODIFIED)
-        self.test_poll(None)
+        assert dir_item.poll().status == STATUS_MODIFIED
+
+    def test_symlink_to_file(self, dir_item):
+
+        p = os.path.abspath('new_file')
+        with open(p, 'w') as f:
+            f.write('test')
+
+        os.chdir(dir_item.path)
+        os.symlink(p, 'link')
+
+        assert dir_item.poll().status == STATUS_MODIFIED
+
+    # TODO:
 
     def test_delete_symlink_from_content(self):
         pass
         # TODO
 
-
-#
-
-class DirectoryTest(unittest.TestCase):
-
-    path = '.'
-
-    def setUp(self):
-
-        # Create temporary directory with example files and change current
-        # working directory to it.
-        self.cwd = os.getcwd()
-        self.temp_path = tempfile.mkdtemp()
-        os.chdir(self.temp_path)
-        self.prepare_files()
-        self.item = Directory(self.path)
-
-    def prepare_files(self):
-
-        create_dir('x')
-        create_file(os.path.join('x', 'cat.txt'), data='meow')
-        create_file('dog.txt', data='wow')
-
-    def test_new_file(self):
-
-        create_file('new.file')
+    # TODO: Events
 
 
 
-        a = [(i.status, i.path) for i in self.item.poll()]
-        b = [(MODIFIED, os.path.abspath('.')),
-             (CREATED, os.path.abspath('new.file'))]
 
-        self.assertCountEqual(a, b)
-#
-    # TODO
+@pytest.mark.usefixtures("tmp_dir", "test_dir")
+class TestDirectoryPolling:
+
+    # Create
+
+    def test_create_root(self):
+        # TODO
+        pass
+
+    def test_create(self):
+
+        p = DirectoryPolling('.')
+        with open('new_file', 'w'):
+            pass
+        os.mkdir('new_dir')
+
+        e = p.poll()
+        assert len(e) == 3
+        assert Event(STATUS_MODIFIED, '.', is_file=False) in e
+        assert Event(STATUS_CREATED, './new_file', is_file=True) in e
+        assert Event(STATUS_CREATED, './new_dir', is_file=False) in e
 
 
-class BaseTest(unittest.TestCase):
+    def test_create_file(self):
+
+        p = DirectoryPolling('.')
+        with open('new_file', 'w'):
+            pass
+        e = p.poll()
+
+        assert len(e) == 2
+        assert Event(STATUS_MODIFIED, '.', is_file=False) in e
+        assert Event(STATUS_CREATED, './new_file', is_file=True) in e
+
+    def test_create_deep_file(self):
+
+        p = DirectoryPolling('.')
+        with open(os.path.join('dir', 'new_file'), 'w'):
+            pass
+        assert not p.poll()
+
+    def test_create_directory(self):
+
+        p = DirectoryPolling('.')
+        os.mkdir('new_dir')
+        e = p.poll()
+
+        assert len(e) == 2
+        assert Event(STATUS_MODIFIED, '.', is_file=False) in e
+        assert Event(STATUS_CREATED, './new_dir', is_file=False) in e
+
+    def test_create_deep_directory(self):
+
+        p = DirectoryPolling('.')
+        os.mkdir(os.path.join('dir', 'new_dir'))
+        assert not p.poll()
+
+    # Delete
+
+    def test_delete_root(self):
+
+        p = DirectoryPolling('dir')
+        shutil.rmtree('dir')
+
+        e = p.poll()
+        assert len(e) == 4
+        # TODO
+        assert Event(STATUS_DELETED, 'dir', is_file=False) in e
+        assert Event(STATUS_DELETED, 'dir/dog.txt', is_file=True) in e
+        assert Event(STATUS_DELETED, 'dir/cat.txt', is_file=True) in e
+        assert Event(STATUS_DELETED, 'dir/dir', is_file=False) in e
+
+    def test_delete_file(self):
+
+        p = DirectoryPolling('.')
+        os.remove('dog.txt')
+        e = p.poll()
+
+        assert len(e) == 2
+        assert Event(STATUS_MODIFIED, '.', is_file=False) in e
+        assert Event(STATUS_DELETED, './dog.txt', is_file=True) in e
+
+    def test_delete_deep_file(self):
+
+        p = DirectoryPolling('.')
+        os.remove(os.path.join('dir', 'dog.txt'))
+        assert not p.poll()
+
+    def test_delete_directory(self):
+
+        p = DirectoryPolling('.')
+        shutil.rmtree('dir')
+        e = p.poll()
+
+        assert len(e) == 2
+        assert Event(STATUS_MODIFIED, '.', is_file=False) in e
+        assert Event(STATUS_DELETED, './dir', is_file=False) in e
+
+    def test_delete_deep_directory(self):
+
+        p = DirectoryPolling('.')
+        shutil.rmtree(os.path.join('dir', 'dir'))
+        assert not p.poll()
+
+    # Permissions
+
+    def test_change_file_permissions(self):
+
+        p = DirectoryPolling('.')
+        os.chmod('dog.txt', stat.S_IREAD) if SYSTEM_WINDOWS else os.chmod('dog.txt', 0o777)
+
+        e = p.poll()
+        assert len(e) == 1
+        assert Event(STATUS_MODIFIED, './dog.txt', is_file=True) in e
+
+        if SYSTEM_WINDOWS:
+            # Prevent PermissionError!
+            os.chmod('dog.txt', stat.S_IWRITE)
+
+    def test_change_directory_permissions(self):
+
+        p = DirectoryPolling('.')
+        os.chmod('dir', stat.S_IREAD) if SYSTEM_WINDOWS else os.chmod('dir', 0o777)
+
+        e = p.poll()
+        assert len(e) == 1
+        assert Event(STATUS_MODIFIED, './dir', is_file=False) in e
+
+        if SYSTEM_WINDOWS:
+            # Prevent PermissionError!
+            os.chmod('dir', stat.S_IWRITE)
+
+    def test_change_root_permissions(self):
+
+        p = DirectoryPolling('.')
+        os.chmod('.', stat.S_IREAD) if SYSTEM_WINDOWS else os.chmod('.', 0o777)
+
+        e = p.poll()
+        assert len(e) == 1
+        assert Event(STATUS_MODIFIED, '.', is_file=False) in e
+
+        if SYSTEM_WINDOWS:
+            # Prevent PermissionError!
+            os.chmod('.', stat.S_IWRITE)
+
+    # Rename
+
+    def test_rename_file(self):
+
+        p = DirectoryPolling('.')
+        os.rename('dog.txt', 'renamed')
+        e = p.poll()
+
+        assert len(e) == 3
+        assert Event(STATUS_DELETED, './dog.txt', is_file=True) in e
+        assert Event(STATUS_CREATED, './renamed', is_file=True) in e
+        assert Event(STATUS_MODIFIED, '.', is_file=False) in e
+
+    def test_rename_directory(self):
+
+        p = DirectoryPolling('.')
+        os.rename('dir', 'renamed')
+        e = p.poll()
+
+        assert len(e) == 3
+        assert Event(STATUS_DELETED, './dir', is_file=False) in e
+        assert Event(STATUS_CREATED, './renamed', is_file=False) in e
+        assert Event(STATUS_MODIFIED, '.', is_file=False) in e
+
+    def test_rename_root(self):
+        pass
+        # TODO
+
+    # Modify
+
+    def test_modify_file(self):
+
+        p = DirectoryPolling('.')
+        with open('dog.txt', 'a') as f:
+            f.write('update')
+        e = p.poll()
+
+        assert len(e) == 1
+        assert Event(STATUS_MODIFIED, './dog.txt', is_file=True) in e
+
+    def test_modify_deep_file(self):
+
+        p = DirectoryPolling('.')
+        with open(os.path.join('dir', 'dog.txt'), 'a') as f:
+            f.write('update')
+        assert not p.poll()
+
+
+
+
+
+
+class BaseTest:
     """A base test class."""
 
     # Watcher class
@@ -841,7 +1068,7 @@ class BaseTest(unittest.TestCase):
             os.walk = original_walk
 
 
-class TestWatcher(BaseTest):
+class TesWatcher:
     """A Watcher"""
 
     class_ = Watcher
@@ -1082,7 +1309,7 @@ class TestWatcher(BaseTest):
         self.assertFalse(x.stop())
 
 
-class TestSimpleWatcher(BaseTest):
+class TesSimpleWatcher:
     """A SimpleWatcher"""
 
     class_ = SimpleWatcher
@@ -1178,7 +1405,7 @@ class TestSimpleWatcher(BaseTest):
         self.assertFalse(thread.is_alive())
 
 
-class TestManager(unittest.TestCase):
+class TesManager:
     """A Manager"""
 
     def setUp(self):
@@ -1312,7 +1539,6 @@ class TestManager(unittest.TestCase):
 
 # Prevent testing base class.
 del BaseTest
-del TestItem
 
 
 # Benchmark

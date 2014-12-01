@@ -35,6 +35,10 @@ CREATED = 1
 MODIFIED = 2
 DELETED = 3
 
+STATUS_CREATED = 1 # 'created'
+STATUS_MODIFIED = 2 # 'modified'
+STATUS_DELETED = 3 # 'deleted'
+
 
 class BaseWatcher:
     """Base watcher class. All other watcher should inherit from this class."""
@@ -121,66 +125,73 @@ class BaseWatcher:
 # Polling Classes.
 
 
-class BasePoller:
+class Investigator:
+    """Checks if an file system item has been modified."""
 
-    def on_create(self, item):
+    def on_create_item(self, item):
         pass
-    def on_modify(self, item):
-        pass
-    def on_delete(self, item):
+    def on_delete_item(self, item):
         pass
 
-class FilePoller(BasePoller):
+    def is_modified(self, item):
+        pass
+
+class PermissionsInvestigator(Investigator):
+    """Checks if an item permissions has been modified."""
 
     def __init__(self, item):
-
         self.stats = item.stat
 
-    def poll(self, item):
-
-        # Check if a file is modified.
-        stat_a = item.stat.st_mtime, item.stat.st_size
-        stat_b = self.stats.st_mtime, self.stats.st_size
-
-        self.stats = item.stat
-        return True if stat_a != stat_b else False
-
-class PermissionsPoller(BasePoller):
-    def __init__(self, item):
-
+    def on_create_item(self, item):
         self.stats = item.stat
 
-    def poll(self, item):
+    def is_modified(self, item):
 
         # st_mode: File mode (permissions)
-        # st_uid: Owner id.
-        # st_gid: Group id.
+        # st_uid: Owner id
+        # st_gid: Group id
         stat_a = item.stat.st_mode, item.stat.st_uid, item.stat.st_gid
         stat_b = self.stats.st_mode, self.stats.st_uid, self.stats.st_gid
 
         self.stats = item.stat
         return True if stat_a != stat_b else False
 
-class DirectoryItemsPoller(BasePoller):
+class FileInvestigator(Investigator):
+    """Checks if an item size or modification time has been modified."""
+
+    def __init__(self, item):
+        self.stats = item.stat
+
+    def on_create_item(self, item):
+        self.stats = item.stat
+
+    def is_modified(self, item):
+
+        stat_a = item.stat.st_mtime, item.stat.st_size
+        stat_b = self.stats.st_mtime, self.stats.st_size
+
+        self.stats = item.stat
+        return True if stat_a != stat_b else False
+
+class ChildrenItemsInvestigator(Investigator):
+    """Checks if a number of child items in directory has been changed."""
 
     def __init__(self, item):
 
         self.dirs = None
         self.files = None
+        self.on_create_item(item)
 
-        self.path = item.path
-        self.on_create(item)
+    def on_create_item(self, item):
 
-    def on_create(self, item):
-
-        for path, dirs, files in os.walk(item.path):
+        for path, dirs, files in os.walk(item._abspath):
             self.dirs = set(dirs)
             self.files = set(files)
             break
 
-    def poll(self, item):
+    def is_modified(self, item):
 
-        for _, dirs, files in os.walk(item.path):
+        for _, dirs, files in os.walk(item._abspath):
             if set(dirs) != self.dirs or set(files) != self.files:
                 self.dirs = set(dirs)
                 self.files = set(files)
@@ -190,37 +201,143 @@ class DirectoryItemsPoller(BasePoller):
 
 
 
-class Item:
+Event = namedtuple('Event', ['status', 'path', 'is_file'])
 
-    def __init__(self, path, pollers=None):
+# class Event:
+#
+#     def __init__(self, status, path, is_file):
+#         self.status = status
+#         self.path = path
+#         self.is_file = is_file
 
-        self.path = os.path.abspath(path)
+
+# REMOVE HERE
+#
+# class BasePoller:
+#
+#     def on_create(self, item):
+#         pass
+#     def on_modify(self, item):
+#         pass
+#     def on_delete(self, item):
+#         pass
+#
+#
+#     def on_create_item(self, item):
+#         pass
+#     def on_modify_item(self, item):
+#         pass
+#     def on_delete_item(self, item):
+#         pass
+#
+# class FilePoller(BasePoller):
+#
+#     def __init__(self, item):
+#
+#         self.stats = item.stat
+#
+#     def poll(self, item):
+#
+#         # Check if a file is modified.
+#         stat_a = item.stat.st_mtime, item.stat.st_size
+#         stat_b = self.stats.st_mtime, self.stats.st_size
+#
+#         self.stats = item.stat
+#         return True if stat_a != stat_b else False
+#
+#     def on_create(self, item):
+#         self.stats = item.stat
+#
+# class PermissionsPoller(BasePoller):
+#     def __init__(self, item):
+#
+#         self.stats = item.stat
+#
+#     def poll(self, item):
+#
+#         # st_mode: File mode (permissions)
+#         # st_uid: Owner id.
+#         # st_gid: Group id.
+#         stat_a = item.stat.st_mode, item.stat.st_uid, item.stat.st_gid
+#         stat_b = self.stats.st_mode, self.stats.st_uid, self.stats.st_gid
+#
+#         self.stats = item.stat
+#         return True if stat_a != stat_b else False
+#
+#     def on_create(self, item):
+#         self.stats = item.stat
+#
+# class DirectoryItemsPoller(BasePoller):
+#
+#     def __init__(self, item):
+#
+#         self.dirs = None
+#         self.files = None
+#
+#         self.path = item.path
+#         self.on_create(item)
+#
+#     def on_create(self, item):
+#
+#         for path, dirs, files in os.walk(item.path):
+#             self.dirs = set(dirs)
+#             self.files = set(files)
+#             break
+#
+#     def poll(self, item):
+#
+#         for _, dirs, files in os.walk(item.path):
+#             if set(dirs) != self.dirs or set(files) != self.files:
+#                 self.dirs = set(dirs)
+#                 self.files = set(files)
+#                 return True
+#             break
+#         return False
+
+# TO HERE
+
+
+
+class ItemPoller:
+
+    def __init__(self, path, investigators=None):
+
+        self.path = path
+        self._abspath = os.path.abspath(path)
+
         self.stat = os.stat(path)
 
         self.status = None
         self.is_file = None
 
-        self.pollers = [i(self) for i in pollers] if pollers else None
+        self.pollers = [i(self) for i in investigators] if investigators else None
 
-        # Item is directory.
+        # ItemPoller is directory.
 
         if S_ISDIR(self.stat.st_mode):
             self.is_file = False
-            if pollers is None:
-                self.pollers = [PermissionsPoller(self),
-                                DirectoryItemsPoller(self)]
+            if investigators is None:
+                self.pollers = [PermissionsInvestigator(self),
+                                ChildrenItemsInvestigator(self)]
 
-        # Item is file.
+        # ItemPoller is file.
 
         else:
             self.is_file = True
-            if pollers is None:
-                self.pollers = [FilePoller(self), PermissionsPoller(self)]
+            if investigators is None:
+                self.pollers = [FileInvestigator(self),
+                                PermissionsInvestigator(self)]
+
+    def exists(self):
+
+        if self.is_file:
+            return os.path.isfile(self._abspath)
+        return os.path.isdir(self._abspath)
 
     def poll(self):
 
         try:
-            stat = os.stat(self.path)
+            stat = os.stat(self._abspath)
         except (IOError, OSError):
             return self.update_status(DELETED)
 
@@ -233,13 +350,23 @@ class Item:
 
         self.stat = stat
 
-        # Item was deleted, but it lives again!
+        # x = False
+        # for i in self.pollers:
+        #     if i.poll(self):
+        #         x = True
+
+
+
+
+
+
+        # ItemPoller was deleted, but it lives again!
         if self.status == DELETED:
             return self.update_status(CREATED)
 
-        for i in self.pollers:
-            if i.poll(self):
-                return self.update_status(MODIFIED)
+        if True in [i.is_modified(self) for i in self.pollers]:
+            return self.update_status(MODIFIED)
+
 
         # Nothing changed.
         self.stat = stat
@@ -251,46 +378,73 @@ class Item:
         if flag == DELETED:
 
             for i in self.pollers:
-                i.on_delete(self)
+                i.on_delete_item(self)
 
             self.stat = None
 
             if self.status == DELETED:
                 return None
             else:
+                e = Event(DELETED, self.path, self.is_file)
+
                 self.status = DELETED
-                self.on_delete()
-                return DELETED
+                self.on_delete(e)
+                return e
 
         elif flag == CREATED:
 
             for i in self.pollers:
-                i.on_create(self)
+                i.on_create_item(self)
+
+            e = Event(CREATED, self.path, self.is_file)
 
             self.status = CREATED
-            self.on_create()
-            return CREATED
+            self.on_create(e)
+            return e
 
         elif flag == MODIFIED:
 
-            for i in self.pollers:
-                i.on_modify(self)
+            # for i in self.pollers:
+            #     i.on_modify(self)
+
+            e = Event(MODIFIED, self.path, self.is_file)
 
             self.status = MODIFIED
-            self.on_modify()
-            return MODIFIED
+            self.on_modify(e)
+            return e
 
     # Events
 
-    def on_create(self):
+    def on_create(self, event):
         pass
 
-    def on_modify(self):
+    def on_modify(self, event):
         pass
 
-    def on_delete(self):
+    def on_delete(self, event):
         pass
 
+
+PathPolling = ItemPoller
+
+
+class FilePolling(ItemPoller):
+    def __init__(self, path):
+        ItemPoller.__init__(self, path,
+                      investigators=[FileInvestigator, PermissionsInvestigator])
+
+
+
+class FileWatcher(BaseWatcher, ItemPoller):
+    def __init__(self, interval, path):
+        BaseWatcher.__init__(self, interval)
+        ItemPoller.__init__(self, path,
+                      investigators=[FilePoller(self), PermissionsPoller(self)])
+
+
+
+class DirectoryWatcher():
+    pass
 
 
 class Directory:
@@ -299,77 +453,97 @@ class Directory:
     def __init__(self, path, recursive=False, filter=None):
 
         # Path must be always absolute!
-        self.path = os.path.abspath(path)
+        self.path = path
+        self._abspath = os.path.abspath(path)
         self.is_recursive = recursive
 
         # Callable that checks ignored paths.
         self.filter = filter
 
-        # List of watched files, key is a file path, value is an Item instance.
-        self.items = {}
+        # List of watched files, key is a file path, value is an ItemPoller instance.
+        self.items = []
 
         for path in self._walk():
-            p = [DirectoryItemsPoller, PermissionsPoller] if os.path.isdir(path) else None
-            self.items[path] = Item(path, pollers=p)
+
+            if path == self.path:
+                p = [ChildrenItemsInvestigator, PermissionsInvestigator]
+            else:
+                p = [PermissionsInvestigator] if os.path.isdir(path) else None
+            self.items.append(ItemPoller(path, investigators=p))
 
     def __repr__(self):
         args = self.__class__.__name__, self.path, self.is_recursive
         return "{}(path={!r}, recursive={!r})".format(*args)
 
+    @property
+    def paths(self):
+        return [i.path for i in self.items]
+
     def _walk(self):
         """Yields watched paths (already filtered)."""
 
-        # yield self.path
+        yield self.path
 
-        for path, dirs, files in os.walk(self.path):
+        for path, dirs, files in os.walk(self._abspath):
             for i in dirs + files:
-                p = os.path.join(path, i)
+                # p = os.path.join(path, i)
+
+
+
+                x = os.path.relpath(path, self._abspath)
+                if x == '.':
+                    p = os.path.join(self.path, i)
+                else:
+                    p = os.path.join(self.path, i)
+
+                # p = os.path.relpath(os.path.join(path, i), self._abspath)
+                # p = i
+
+                print(x)
+                print(p)
+                # p = os.path.join()
                 if self.filter and not self.filter(p):
                     continue
                 yield p
             if not self.is_recursive:
                 break
 
-
     def poll(self):
 
-        events = []
+        x = []
 
-        for i in self.items.copy().values():
+        for i in self.items[:]:
 
-            status = i.poll()
-            print(i, status)
+            event = i.poll()
+            if event:
+                if event.status == STATUS_MODIFIED:
+                    self.on_modified(event)
+                    x.append(event)
 
-
-
-            if status == MODIFIED:
-
-                # if not self.is_recursive:
-                #     if not i.is_file:
-                #         continue
-
-                self.on_modified(i)
-                events.append(i)
-
-            elif status == DELETED:
-                self.on_deleted(i)
-                self.items.pop(i.path)
-                events.append(i)
+                elif event.status == STATUS_DELETED:
+                    self.items.remove(i)
+                    self.on_deleted(event)
+                    x.append(event)
 
         for path in self._walk():
-            if path not in self.items:
+            if path not in self.paths:
                 try:
-                    p = [DirectoryItemsPoller, PermissionsPoller] if os.path.isdir(path) else None
-                    x = Item(path, pollers=p)
+                    p = [PermissionsInvestigator] if os.path.isdir(path) else None
+                    i = ItemPoller(path, investigators=p)
+
+                # Path could be deleted during this method.
                 except (IOError, OSError):
                     continue
-                x.status = CREATED
-                if x.path:
-                    self.items[path] = x
-                    self.on_created(x)
-                    events.append(x)
 
-        return events
+                # TODO: or update_status()?
+                i.status = CREATED
+                self.items.append(i)
+
+                e = Event(STATUS_CREATED, i.path, i.is_file)
+                self.on_created(e)
+                x.append(e)
+
+        return x
 
 
     def on_created(self, item):
@@ -381,14 +555,15 @@ class Directory:
     def on_deleted(self, item):
         pass
 
+DirectoryPolling = Directory
 
 
-class ItemWatcher(BaseWatcher, Item):
+class ItemWatcher(BaseWatcher, ItemPoller):
     """TODO"""
 
     def __init__(self, interval, path):
         BaseWatcher.__init__(self, interval)
-        Item.__init__(self, path)
+        ItemPoller.__init__(self, path)
 
     def __repr__(self):
         args = self.__class__.__name__, self.path
