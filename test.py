@@ -16,7 +16,7 @@ import pytest
 import threading
 
 import watchers
-from watchers import Watcher, PathPolling, Event, PYTHON32, DirectoryPolling, FilePolling, FileWatcher, SimpleWatcher, Manager, DELETED, CREATED, MODIFIED, ItemPoller, Directory, STATUS_CREATED, STATUS_DELETED, STATUS_MODIFIED
+from watchers import Watcher, PathPolling, Event, PYTHON32, DirectoryPolling, FilePolling, FileWatcher, SimpleWatcher, Manager, DELETED, CREATED, MODIFIED, Directory, STATUS_CREATED, STATUS_DELETED, STATUS_MODIFIED
 
 # For faster testing.
 CHECK_INTERVAL = 0.25
@@ -119,7 +119,7 @@ def event(request):
 class TestPathPolling:
 
     def test_repr(self):
-        assert repr(PathPolling('.')) == "<ItemPoller: path=.>"
+        assert repr(PathPolling('.')) == "<PathPolling: path=., is_file=False>"
 
     def test_path_not_found(self):
 
@@ -423,8 +423,7 @@ class TestPathPolling:
 
     def test_on_created(self, item, event):
 
-        def on_created(e):
-            assert e == event
+        def on_created():
             item.called = True
         item.on_created = on_created
 
@@ -433,8 +432,7 @@ class TestPathPolling:
 
     def test_on_deleted(self, item, event):
 
-        def on_deleted(e):
-            assert e == event
+        def on_deleted():
             item.called = True
         item.on_deleted = on_deleted
 
@@ -443,8 +441,7 @@ class TestPathPolling:
 
     def test_on_modified(self, item, event):
 
-        def on_modified(e):
-            assert e == event
+        def on_modified():
             item.called = True
         item.on_modified = on_modified
 

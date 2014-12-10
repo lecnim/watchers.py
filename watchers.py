@@ -74,25 +74,18 @@ Event = namedtuple('Event', ['status', 'path', 'is_file'])
 # Investigators
 
 class Investigator:
-    """Detects if a file system item has been modified."""
+    """Detects changes in a file system."""
 
+    def update(self, item):
+        pass
     def detect(self, item):
         pass
 
-    def on_created(self, item):
-        pass
-    def on_deleted(self, item):
-        pass
-    def on_modified(self, item):
-        pass
-
-    def is_modified(self, item):
-        pass
 
 class ExistsInvestigator(Investigator):
+    """Detects if a file or directory has been created or deleted."""
 
-
-    def __init__(self, item):
+    def update(self, item):
         self.exists = item.exists()
 
     def detect(self, item):
@@ -107,98 +100,11 @@ class ExistsInvestigator(Investigator):
 
         return None
 
-    # Events
 
-    # def on_created(self, item):
-    #     self.exists = True
-    # def on_deleted(self, item):
-    #     self.exists = False
-    #
-    # def on_any_event(self, item, event):
-    #
-    #     if event.status == STATUS_DELETED:
-    #         self.exists = False
-    #     elif event.status == STATUS_CREATED:
-    #         self.exists = True
-
-
-
-class PermissionsInvestigator(Investigator):
-    """Detects if an item permissions has been modified."""
-
-    def __init__(self, item):
-        self.stats = item.stat
-
-    def detect(self, item):
-        # st_mode: File mode (permissions)
-        # st_uid: Owner id
-        # st_gid: Group id
-        stat_a = item.stat.st_mode, item.stat.st_uid, item.stat.st_gid
-        stat_b = self.stats.st_mode, self.stats.st_uid, self.stats.st_gid
-        return STATUS_MODIFIED if stat_a != stat_b else None
-
-    # Events
-
-    # def on_created(self, item):
-    #     self.stats = item.stat
-    # def on_modified(self, item):
-    #     self.stats = item.stat
-    #
-    # def on_any_event(self, item, event):
-    #
-    #     if event.status != STATUS_DELETED:
-    #         self.stats = item.stat
-    #
-    #
-    # def is_modified(self, item):
-    #
-    #     # st_mode: File mode (permissions)
-    #     # st_uid: Owner id
-    #     # st_gid: Group id
-    #     stat_a = item.stat.st_mode, item.stat.st_uid, item.stat.st_gid
-    #     stat_b = self.stats.st_mode, self.stats.st_uid, self.stats.st_gid
-    #
-    #     self.stats = item.stat
-    #     return True if stat_a != stat_b else False
-
-class FileInvestigator(Investigator):
-    """Detects if an item size or modification time has been modified."""
-
-    def __init__(self, item):
-        self.stats = item.stat
-
-    def detect(self, item):
-        stat_a = item.stat.st_mtime, item.stat.st_size
-        stat_b = self.stats.st_mtime, self.stats.st_size
-        return STATUS_MODIFIED if stat_a != stat_b else None
-
-    # Events
-
-    # def on_created(self, item):
-    #     self.stats = item.stat
-    # def on_modified(self, item):
-    #     self.stats = item.stat
-    #
-    # def on_any_event(self, item, event):
-    #
-    #     if event.status != STATUS_DELETED:
-    #         self.stats = item.stat
-    #
-    #
-    #
-    # def is_modified(self, item):
-    #
-    #     stat_a = item.stat.st_mtime, item.stat.st_size
-    #     stat_b = self.stats.st_mtime, self.stats.st_size
-    #
-    #     self.stats = item.stat
-    #     return True if stat_a != stat_b else False
-
-# DirectoryContentInvestigator
 class DirectoryContentInvestigator(Investigator):
-    """Detects if a number of child items in directory has been changed."""
+    """Detects if the number of child items in directory has been changed."""
 
-    def __init__(self, item):
+    def update(self, item):
 
         for path, dirs, files in os.walk(item.full_path):
             self.dirs = set(dirs)
@@ -214,61 +120,62 @@ class DirectoryContentInvestigator(Investigator):
         return None
 
 
+class StatsInvestigator(Investigator):
+    """Base class for investigating a file or directory stats."""
+
+    def _get_stat(self, path):
+        try:
+            return os.stat(path)
+        except (IOError, OSError):
+            return None
+
+    def update(self, item):
+        self.stats = self._get_stat(item.full_path)
 
 
+class PermissionsInvestigator(StatsInvestigator):
+    """Detects if a file or directory permissions has been modified."""
 
-    # Events
-    #
-    # def on_any_event(self, item, event):
-    #
-    #     if event.status != STATUS_DELETED:
-    #         for path, dirs, files in os.walk(item.full_path):
-    #             self.dirs = set(dirs)
-    #             self.files = set(files)
-    #             break
-    #
-    #
-    #
-    # def on_created(self, item):
-    #
-    #     for path, dirs, files in os.walk(item.full_path):
-    #         self.dirs = set(dirs)
-    #         self.files = set(files)
-    #         break
-    #
-    # def on_modified(self, item):
-    #
-    #     for path, dirs, files in os.walk(item.full_path):
-    #         self.dirs = set(dirs)
-    #         self.files = set(files)
-    #         break
-    #
-    # # def on_created(self, item):
-    # #
-    # #     for path, dirs, files in os.walk(item.full_path):
-    # #         self.dirs = set(dirs)
-    # #         self.files = set(files)
-    # #         break
-    # #
-    #
-    #
-    #
-    # def is_modified(self, item):
-    #
-    #     for _, dirs, files in os.walk(item.full_path):
-    #         if set(dirs) != self.dirs or set(files) != self.files:
-    #             self.dirs = set(dirs)
-    #             self.files = set(files)
-    #             return True
-    #         break
-    #     return False
+    def detect(self, item):
+
+        stat = self._get_stat(item.full_path)
+
+        # Item not exists or just created.
+        if None in (stat, self.stats):
+            return None
+
+        # st_mode: File mode (permissions)
+        # st_uid: Owner id
+        # st_gid: Group id
+        stat_a = stat.st_mode, stat.st_uid, stat.st_gid
+        stat_b = self.stats.st_mode, self.stats.st_uid, self.stats.st_gid
+        return STATUS_MODIFIED if stat_a != stat_b else None
+
+
+class FileInvestigator(StatsInvestigator):
+    """Detects if a file size or modification time has been modified."""
+
+    def detect(self, item):
+
+        stat = self._get_stat(item.full_path)
+
+        # Item not exists or just created.
+        if None in (stat, self.stats):
+            return None
+
+        stat_a = stat.st_mtime, stat.st_size
+        stat_b = self.stats.st_mtime, self.stats.st_size
+        return STATUS_MODIFIED if stat_a != stat_b else None
 
 
 # Polling classes.
 
-class ItemPoller:
+class PathPolling:
 
     def __init__(self, path, root=None, investigators=None):
+
+        # TODO: Better raising path not found
+        os.stat(path)
 
         self.path = path
 
@@ -277,161 +184,90 @@ class ItemPoller:
         else:
             self.full_path = os.path.normpath(os.path.join(root, path))
 
-        self.stat = os.stat(self.full_path)
-        self.status = None
-        self.is_file = None
-
-        # self.investigators = [i(self) for i in investigators] if investigators else None
+        self.is_file = True if os.path.isfile(self.full_path) else False
+        self.is_directory = not self.is_file
         self.investigators = investigators
 
         # Polling directory.
 
-        if S_ISDIR(self.stat.st_mode):
-            self.is_file = False
+        if not self.is_file:
             if investigators is None:
-                self.investigators = [PermissionsInvestigator(self),
-                                      DirectoryContentInvestigator(self)]
-
+                self.investigators = [ExistsInvestigator(),
+                                      PermissionsInvestigator(),
+                                      DirectoryContentInvestigator()]
         # Polling file.
 
         else:
             self.is_file = True
             if investigators is None:
-                self.investigators = [FileInvestigator(self),
-                                      PermissionsInvestigator(self)]
+                self.investigators = [ExistsInvestigator(),
+                                      FileInvestigator(),
+                                      PermissionsInvestigator()]
+
+        self.update_investigators()
 
     def __repr__(self):
-        return ("<{class_name}: path={path}>").format(
+        return ("<{class_name}: path={path}, is_file={is_file}>").format(
             class_name=self.__class__.__name__,
-            path=self.path)
+            path=self.path,
+            is_file=self.is_file)
 
     def exists(self):
+        """Returns True if an item exists."""
 
         if self.is_file:
             return os.path.isfile(self.full_path)
         return os.path.isdir(self.full_path)
 
+    def update_investigators(self):
+        for i in self.investigators:
+            i.update(self)
 
-    def receive_event(self):
-        pass
+    def investigate(self):
+        """Uses investigators to detect changes in the file system."""
 
-    def poll(self, events=True):
+        event = None
 
-        try:
-            stat = os.stat(self.full_path)
-        except (IOError, OSError):
-            return self.dispatch_event(STATUS_DELETED)
+        for i in self.investigators:
+            event_type = i.detect(self)
+            if event_type:
+                event = Event(event_type, self.path, self.is_file)
+                break
 
-        # Path found.
+        self.update_investigators()
+        return event
 
-        # Swapped file and directory.
-        if S_ISDIR(stat.st_mode) and self.is_file or \
-           not S_ISDIR(stat.st_mode) and not self.is_file:
-            return self.dispatch_event(STATUS_DELETED)
+    def poll(self):
 
-        self.stat = stat
+        event = self.investigate()
+        if event:
+            self.dispatch_event(event)
 
-        # Item was deleted, but it lives again!
-        if self.status == STATUS_DELETED:
-            return self.dispatch_event(STATUS_CREATED)
+        return event
 
-        if True in [i.is_modified(self) for i in self.investigators]:
-            return self.dispatch_event(STATUS_MODIFIED)
+    def dispatch_event(self, x):
 
-        # Nothing changed.
-        self.status = None
-        return None
+        if x.status == STATUS_CREATED:
+            self.on_created()
 
-    def get_event(self, event_type):
+        elif x.status == STATUS_DELETED:
+            self.on_deleted()
 
-        if event_type == STATUS_DELETED:
-
-            for i in self.investigators:
-                i.on_deleted(self)
-
-            self.stat = None
-
-            if self.status == STATUS_DELETED:
-                return None
-            else:
-                e = Event(STATUS_DELETED, self.path, self.is_file)
-
-                self.status = STATUS_DELETED
-                # self.on_deleted(e)
-                return e
-
-        elif event_type == STATUS_CREATED:
-
-            for i in self.investigators:
-                i.on_created(self)
-
-            e = Event(STATUS_CREATED, self.path, self.is_file)
-
-            self.status = STATUS_CREATED
-            # self.on_created(e)
-            return e
-
-        elif event_type == STATUS_MODIFIED:
-
-            e = Event(STATUS_MODIFIED, self.path, self.is_file)
-
-            self.status = STATUS_MODIFIED
-            # self.on_modified(e)
-            return e
-
-
-
-    def dispatch_event(self, event_type):
-
-        if event_type == STATUS_DELETED:
-
-            for i in self.investigators:
-                i.on_deleted(self)
-
-            self.stat = None
-
-            if self.status == STATUS_DELETED:
-                return None
-            else:
-                e = Event(STATUS_DELETED, self.path, self.is_file)
-
-                self.status = STATUS_DELETED
-                self.on_deleted(e)
-                return e
-
-        elif event_type == STATUS_CREATED:
-
-            for i in self.investigators:
-                i.on_created(self)
-
-            e = Event(STATUS_CREATED, self.path, self.is_file)
-
-            self.status = STATUS_CREATED
-            self.on_created(e)
-            return e
-
-        elif event_type == STATUS_MODIFIED:
-
-            e = Event(STATUS_MODIFIED, self.path, self.is_file)
-
-            self.status = STATUS_MODIFIED
-            self.on_modified(e)
-            return e
+        elif x.status == STATUS_MODIFIED:
+            self.on_modified()
 
     # Events
 
-    # TODO: delete event arg
-
-    def on_created(self, event):
+    def on_created(self):
         pass
 
-    def on_modified(self, event):
+    def on_modified(self):
         pass
 
-    def on_deleted(self, event):
+    def on_deleted(self):
         pass
 
-PathPolling = ItemPoller
+# PathPolling = ItemPoller
 
 
 
@@ -898,14 +734,14 @@ class BaseWatcher:
 
 
 
-class FilePolling(ItemPoller):
+class FilePolling(PathPolling):
     def __init__(self, path):
         ItemPoller.__init__(self, path,
                       investigators=[FileInvestigator, PermissionsInvestigator])
 
 
 
-class FileWatcher(BaseWatcher, ItemPoller):
+class FileWatcher(BaseWatcher, PathPolling):
     def __init__(self, interval, path):
         BaseWatcher.__init__(self, interval)
         ItemPoller.__init__(self, path,
@@ -916,7 +752,7 @@ class FileWatcher(BaseWatcher, ItemPoller):
 class DirectoryWatcher():
     pass
 
-class ItemWatcher(BaseWatcher, ItemPoller):
+class ItemWatcher(BaseWatcher, PathPolling):
     """TODO"""
 
     def __init__(self, interval, path):
