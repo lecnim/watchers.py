@@ -683,6 +683,9 @@ class TestDirectoryPolling:
             (STATUS_MODIFIED, './dir/dir/file', True)
         )
 
+        assert a.poll() == []
+        assert b.poll() == []
+
     # Rename
     #
     # @pytest.mark.parametrize("args, events", [
@@ -767,6 +770,11 @@ class TestDirectoryPolling:
             (STATUS_MODIFIED, '.', False)
         )
 
+        assert a.poll() == []
+        assert b.poll() == []
+
+    # Delete
+
     def test_delete_items(self):
 
         a = DirectoryPolling('.')
@@ -789,27 +797,30 @@ class TestDirectoryPolling:
             (STATUS_MODIFIED, '.', False),
         )
 
+        assert a.poll() == []
+        assert b.poll() == []
 
+    def test_delete_root(self):
 
-    # Delete
+        a = DirectoryPolling('dir')
+        b = DirectoryPolling('dir', recursive=True)
 
-    # def test_delete_root(self):
-    #
-    #     p = DirectoryPolling('dir')
-    #     shutil.rmtree('dir')
-    #
-    #     e = p.poll()
-    #
-    #     assert Event(STATUS_DELETED, os.path.join('dir', 'dir'),
-    #                  is_file=False) in e
-    #     assert Event(STATUS_DELETED, os.path.join('dir', 'dog.txt'),
-    #                  is_file=True) in e
-    #     assert Event(STATUS_DELETED, os.path.join('dir', 'cat.txt'),
-    #                  is_file=True) in e
-    #     assert Event(STATUS_MODIFIED, 'dir', is_file=False) in e
-    #     assert Event(STATUS_DELETED, 'dir', is_file=False) in e
-    #     assert len(e) == 5
+        shutil.rmtree('dir')
 
+        assert a.poll() == create_events(
+            (STATUS_DELETED, 'dir/file', True),
+            (STATUS_DELETED, 'dir/dir', False),
+            (STATUS_DELETED, 'dir', False)
+        )
+        assert b.poll() == create_events(
+            (STATUS_DELETED, 'dir/dir/file', True),
+            (STATUS_DELETED, 'dir/file', True),
+            (STATUS_DELETED, 'dir/dir', False),
+            (STATUS_DELETED, 'dir', True),
+        )
+
+        assert a.poll() == []
+        assert b.poll() == []
 
 
     # Permissions
