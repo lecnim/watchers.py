@@ -16,7 +16,6 @@ TODO: Better benchmark function
 import os
 import sys
 import threading
-from stat import *
 from collections import namedtuple
 
 __version__ = '1.0.1-rc.1'
@@ -28,47 +27,12 @@ if sys.hexversion < 0x030200F0:
 # Python 3.2 do not support ns in os.stats!
 PYTHON32 = True if sys.hexversion < 0x030300F0 else False
 
+# Events types.
+EVENT_TYPE_CREATED = 'created'
+EVENT_TYPE_MODIFIED = 'modified'
+EVENT_TYPE_DELETED = 'deleted'
 
-
-
-CREATED = 'created'
-MODIFIED = 'modified'
-DELETED = 'deleted'
-
-STATUS_CREATED = 'created'
-STATUS_MODIFIED = 'modified'
-STATUS_DELETED = 'deleted'
-
-
-Event = namedtuple('Event', ['status', 'path', 'is_file'])
-
-#
-# class Event:
-#     def __init__(self, status, path, is_file=None):
-#         self.status = status
-#         self.path = path
-#         self.is_file = os.path.isfile(path) if is_file is None else is_file
-#         self.is_directory = not self.is_file
-#
-#     def __repr__(self):
-#         return ("<{class_name}: status={status}, "
-#                 "path={path}, is_file={is_file}>").format(
-#             class_name=self.__class__.__name__,
-#             status=self.status,
-#             path=self.path,
-#             is_file=self.is_file)
-#
-#
-#     def __eq__(self, other):
-#         if (self.status == other.status,
-#             self.path == other.path,
-#             self.is_file == other.is_file):
-#             return True
-#         return False
-#
-#
-#     def __hash__(self):
-#         return hash((self.status, self.path, self.is_file))
+Event = namedtuple('Event', ['type', 'path', 'is_file'])
 
 
 # Investigators
@@ -92,11 +56,11 @@ class ExistsInvestigator(Investigator):
 
         # Item was deleted.
         if not item.exists() and self.exists:
-            return STATUS_DELETED
+            return EVENT_TYPE_DELETED
 
         # Item was created.
         if item.exists() and not self.exists:
-            return STATUS_CREATED
+            return EVENT_TYPE_CREATED
 
         return None
 
@@ -115,7 +79,7 @@ class DirectoryContentInvestigator(Investigator):
 
         for _, dirs, files in os.walk(item.full_path):
             if set(dirs) != self.dirs or set(files) != self.files:
-                return STATUS_MODIFIED
+                return EVENT_TYPE_MODIFIED
             break
         return None
 
@@ -149,7 +113,7 @@ class PermissionsInvestigator(StatsInvestigator):
         # st_gid: Group id
         stat_a = stat.st_mode, stat.st_uid, stat.st_gid
         stat_b = self.stats.st_mode, self.stats.st_uid, self.stats.st_gid
-        return STATUS_MODIFIED if stat_a != stat_b else None
+        return EVENT_TYPE_MODIFIED if stat_a != stat_b else None
 
 
 class FileInvestigator(StatsInvestigator):
@@ -165,7 +129,7 @@ class FileInvestigator(StatsInvestigator):
 
         stat_a = stat.st_mtime, stat.st_size
         stat_b = self.stats.st_mtime, self.stats.st_size
-        return STATUS_MODIFIED if stat_a != stat_b else None
+        return EVENT_TYPE_MODIFIED if stat_a != stat_b else None
 
 
 # Polling classes.
@@ -174,15 +138,15 @@ class PathPolling:
 
     def __init__(self, path, root=None, investigators=None):
 
-        # TODO: Better raising path not found
-        os.stat(path)
-
         self.path = path
 
         if root is None:
             self.full_path = os.path.abspath(path)
         else:
             self.full_path = os.path.normpath(os.path.join(root, path))
+
+        # TODO: Better raising path not found
+        os.stat(self.full_path)
 
         self.is_file = True if os.path.isfile(self.full_path) else False
         self.is_directory = not self.is_file
@@ -247,13 +211,13 @@ class PathPolling:
 
     def dispatch_event(self, x):
 
-        if x.status == STATUS_CREATED:
+        if x.type == EVENT_TYPE_CREATED:
             self.on_created()
 
-        elif x.status == STATUS_DELETED:
+        elif x.type == EVENT_TYPE_DELETED:
             self.on_deleted()
 
-        elif x.status == STATUS_MODIFIED:
+        elif x.type == EVENT_TYPE_MODIFIED:
             self.on_modified()
 
     # Events
@@ -267,16 +231,11 @@ class PathPolling:
     def on_deleted(self):
         pass
 
-# PathPolling = ItemPoller
 
-
-
-class Directory:
+class DirectoryPolling:
     """Watcher with events."""
 
     def __init__(self, path, recursive=False, filter=None):
-
-        # Path must be always absolute!
 
         self.path = path
         self.root = os.getcwd()
@@ -288,62 +247,123 @@ class Directory:
         self.filter = filter
 
         # List of PathPolling instances.
-        self.paths = {}
+        self.items = [self.create_item(path) for path in self._walk()]
+
         self.directory_tree = {}
-
-        # self.dirs = []
-
-        self.items = [self.new_item(path) for path in self._walk()]
         self.update_tree()
 
-        # self.tree = [i for i in self._walk()]
-
-
-
-        # for i in self.items:
-        #
-        #     if not i.is_file:
-        #         if not i.path in self.paths:
-        #             self.paths[i.path] = {'files': [], 'dirs': []}
-        #             self.dirs.append(i.path)
-        #
-        #     if i.path != self.path:
-        #
-        #         root = os.path.dirname(i.path)
-        #
-        #         if i.is_file:
-        #             self.paths[root]['files'].append(i)
-        #         else:
-        #             self.paths[root]['dirs'].append(i)
-
-
-        # print(self.dirs)
-
-
-
     def __repr__(self):
-
         return ("<{class_name}: path={path}, "
                 "is_recursive={is_recursive}>").format(
             class_name=self.__class__.__name__,
             path=self.path,
             is_recursive=self.is_recursive)
 
-    @property
-    def items_paths(self):
-        return [i.path for i in self.items]
+    def item_exists(self, x):
 
-    @property
-    def files(self):
+        # TODO: Optimize this!
+        if (x.is_file, x.path) in [(i.is_file, i.path) for i in self.items]:
+            return True
+        return False
+
+    def create_item(self, path):
+
+        if os.path.isfile(path):
+            x = [ExistsInvestigator(),
+                 FileInvestigator(),
+                 PermissionsInvestigator()]
+        else:
+            if self.is_recursive or self.path == path:
+                x = [ExistsInvestigator(),
+                     DirectoryContentInvestigator(),
+                     PermissionsInvestigator()]
+            else:
+                x = [ExistsInvestigator(),
+                     PermissionsInvestigator()]
+
+        return PathPolling(path, root=self.root, investigators=x)
+
+    def _walk(self):
+        """Yields watched paths, already filtered."""
+
+        # Fixed: Also filter root directory!
+        if os.path.isdir(self.full_path):
+            if self.filter is None or self.filter(self.path):
+                yield self.path
+
+        for root, dirs, files in os.walk(self.full_path):
+            for name in sorted(files) + sorted(dirs):
+
+                # Path is generated using self.path attribute, to preserve
+                # arguments during calling __init__.
+                # For example: DirectoryPolling('.') => PathPolling('./filename)
+
+                if root == self.full_path:
+                    p = os.path.join(self.path, name)
+                else:
+                    p = os.path.join(self.path,
+                                     os.path.relpath(root, self.full_path),
+                                     name)
+
+                if self.filter and not self.filter(p):
+                    continue
+                yield p
+
+            if not self.is_recursive:
+                break
+
+    def poll(self):
+
+        events = []
+
+        for item in self.items:
+            e = item.investigate()
+            if e:
+                events.append((item, e))
+
+        items = []
+        for i in self._walk():
+            item = self.create_item(i)
+            items.append(item)
+
+            if not self.item_exists(item):
+                events.append((item, Event(EVENT_TYPE_CREATED, item.path, item.is_file)))
+
+        events = self.sort_events(events)
+        self.dispatch_events(events)
+        self.items = items
+
+        return [i[1] for i in events]
+
+    def sort_events(self, x):
+        return sorted(x, key=lambda x: x[1].type)
+
+    def dispatch_events(self, x):
+
+        for item, event in x:
+            item.dispatch_event(event)
+
+            if event.type == EVENT_TYPE_CREATED:
+                self.on_created(event)
+
+            if event.type == EVENT_TYPE_DELETED:
+                self.on_deleted(event)
+
+            if event.type == EVENT_TYPE_MODIFIED:
+                self.on_modified(event)
+
+    # Events
+
+    def on_created(self, item):
         pass
 
-    # @property
-    # def dirs(self):
-    #
-    #     for i in self.items:
-    #         if not i.is_file:
-    #             yield i.path
+    def on_modified(self, item):
+        pass
 
+    def on_deleted(self, item):
+        pass
+
+    # What to do with this?
 
     def walk_dirs(self, top_down=True):
 
@@ -353,20 +373,19 @@ class Directory:
             if not i.is_file:
                 yield i.path
 
+    def walk_items(self, top_down=True, dirs_first=False):
 
-    def new_item(self, path):
+        if top_down:
+            yield self.items[0]
 
-        if os.path.isdir(path):
-            x = [DirectoryContentInvestigator, PermissionsInvestigator]
-        else:
-            x = [FileInvestigator, PermissionsInvestigator]
+        for path in self.walk_dirs(top_down):
+            items_order = [1, 0] if dirs_first else [0, 1]
+            for x in items_order:
+                for item in self.directory_tree[path][x]:
+                    yield item
 
-        i = ItemPoller(path, root=self.root, investigators=x)
-
-
-
-
-        return i
+        if not top_down:
+            yield self.items[0]
 
     def update_tree(self):
 
@@ -392,265 +411,6 @@ class Directory:
                 else:
                     # self.paths[root]['dirs'].append(i)
                     self.directory_tree[root][1].append(i)
-
-
-    def walk(self, path):
-        for root, dirs, files in os.walk(path):
-            yield root, dirs, files
-
-
-
-
-
-    def _walk(self):
-        """Yields watched paths, already filtered."""
-
-        # Fixed: Also filter root directory!
-        if self.filter is None or self.filter(self.path):
-            yield self.path
-
-        for root, dirs, files in self.walk(self.full_path):
-            for name in sorted(files) + sorted(dirs):
-
-                # Path is generated using self.path attribute, to preserve
-                # arguments during calling __init__.
-                # For example: DirectoryPolling('.') => PathPolling('./filename)
-
-                if root == self.full_path:
-                    p = os.path.join(self.path, name)
-                else:
-                    p = os.path.join(self.path,
-                                     os.path.relpath(root, self.full_path),
-                                     name)
-
-                if self.filter and not self.filter(p):
-                    continue
-                yield p
-
-            if not self.is_recursive:
-                break
-
-    #
-    # def _iter_created_items(self):
-    #
-    #     for path in self._walk():
-    #         if path not in self.items_paths:
-    #
-    #             try:
-    #                 yield self.new_item(path)
-    #             # Path could be deleted during this method.
-    #             except (IOError, OSError):
-    #                 continue
-
-    # def _get_parent_item(self, item):
-    #
-    #     root = os.path.dirname(item.path)
-    #
-    #     for i in self.items:
-    #         if i.path == root:
-    #             return i
-
-    def _dispatch_event(self, event_status, item):
-
-        event = item.dispatch_event(event_status)
-
-        if event_status is STATUS_CREATED:
-            self.on_created(event)
-        elif event_status is STATUS_DELETED:
-            self.on_deleted(event)
-        elif event_status is STATUS_MODIFIED:
-            self.on_modified(event)
-
-        return event
-
-    # def _poll_item(self, item):
-    #
-    #     event = item.poll()
-    #     if event:
-    #         if event.status == STATUS_MODIFIED:
-    #             self.on_modified(event)
-    #             yield event
-    #
-    #         elif event.status == STATUS_DELETED:
-    #
-    #             parent = self._get_parent_item(item)
-    #             if parent:
-    #                 yield self._dispatch_event(STATUS_MODIFIED, parent)
-    #
-    #             self.on_deleted(event)
-    #             yield event
-
-    def walk_items(self, top_down=True, dirs_first=False):
-
-        # items = self.items if top_down else reversed(self.items)
-
-        # dirs = self.dirs if top_down else reversed(self.dirs)
-
-        if top_down:
-            yield self.items[0]
-
-        for path in self.walk_dirs(top_down):
-            print('>', path)
-            items_order = [1, 0] if dirs_first else [0, 1]
-            for x in items_order:
-                for item in self.directory_tree[path][x]:
-                    yield item
-
-        if not top_down:
-            yield self.items[0]
-
-        # dirs = self.dirs if top_down else reversed(self.dirs)
-        #
-        # if top_down:
-        #     yield self.items[0]
-        #
-        # for path in dirs:
-        #     items_order = ['dirs', 'files'] if dirs_first else ['files', 'dirs']
-        #     for x in items_order:
-        #         for item in self.paths[path][x]:
-        #             yield item
-        #
-        # if not top_down:
-        #     yield self.items[0]
-
-    def get_events(self):
-        pass
-
-    def sort_events(self, x):
-
-        for item, event in x:
-            pass
-
-    def dispatch_events(self, x):
-
-        for item, event in x:
-            pass
-
-
-    def poll(self):
-
-        events = []
-
-        for i in self.items:
-            e = i.poll()
-            events.append((i, e))
-
-
-        items = []
-        for i in self._walk():
-            item = self.new_item(i)
-            items.append(item)
-
-            if not i in self.items_paths:
-                events.append((item, self._dispatch_event(STATUS_CREATED, item)))
-
-
-        self.sort_events(events)
-        self.dispatch_events(events)
-        self.items = items
-
-
-
-        print(self.items)
-
-        events = []
-        new_items = []
-        new_paths = []
-
-        for i in self._walk():
-            print(i)
-            item = self.new_item(i)
-            new_items.append(item)
-            new_paths.append(i)
-
-            if i not in self.items_paths:
-                events.append(self._dispatch_event(STATUS_CREATED, item))
-
-
-        for i in self.walk_items(top_down=False):
-            print(i)
-            if i.path not in new_paths:
-                events.append(self._dispatch_event(STATUS_DELETED, i))
-
-        for i in self.walk_items():
-            if i.status is None:
-                e = i.poll()
-                if e and e.status == STATUS_MODIFIED:
-                    self.on_modified(e)
-                    events.append(e)
-
-        self.items = new_items
-        self.update_tree()
-
-        print(self.items)
-
-        return events
-
-        #
-        # tree = [i for i in self._walk()]
-        #
-        # created = set(tree) - set(self.tree)
-        # deleted = set(self.tree) - set(tree)
-        #
-        # for i in self.walk_items(top_down=False):
-        #     if i.path in deleted:
-        #         pass
-        #
-        #
-        #
-        # events = []
-        #
-        # # Created items.
-        #
-        # for path in self._walk():
-        #
-        #     # Create
-        #
-        #     if path not in self.items_paths:
-        #
-        #         try:
-        #             item = self.new_item(path)
-        #         # Path could be deleted during this method.
-        #         except (IOError, OSError):
-        #             continue
-        #
-        #         self.items.append(item)
-        #         events.append(self._dispatch_event(STATUS_CREATED, item))
-        #
-        # # Deleted items.
-        #
-        # deleted = []
-        # for item in self.walk_items(top_down=False):
-        #     if not item.exists():
-        #         e = self._dispatch_event(STATUS_DELETED, item)
-        #         events.append(e)
-        #         deleted.append(item)
-        #
-        # self.items = [i for i in self.items if i not in deleted]
-        #
-        # # Modified items.
-        #
-        # for item in self.walk_items():
-        #     event = item.poll()
-        #
-        #     if item.status == STATUS_MODIFIED:
-        #         self.on_modified(event)
-        #         events.append(event)
-        #
-        # return events
-
-    # Events
-
-    def on_created(self, item):
-        pass
-
-    def on_modified(self, item):
-        pass
-
-    def on_deleted(self, item):
-        pass
-
-DirectoryPolling = Directory
 
 
 
@@ -771,7 +531,7 @@ class ItemWatcher(BaseWatcher, PathPolling):
 
 
 
-class Watcher(BaseWatcher, Directory):
+class Watcher(BaseWatcher, DirectoryPolling):
     """Watcher with events."""
 
     def __init__(self, interval, path, recursive=False, filter=None):
@@ -937,3 +697,32 @@ class Manager:
         # With this lock threads cannot modify self.watcher.
         for i in x:
             i.check()
+
+
+#
+# class Event:
+#     def __init__(self, status, path, is_file=None):
+#         self.type = status
+#         self.path = path
+#         self.is_file = os.path.isfile(path) if is_file is None else is_file
+#         self.is_directory = not self.is_file
+#
+#     def __repr__(self):
+#         return ("<{class_name}: status={status}, "
+#                 "path={path}, is_file={is_file}>").format(
+#             class_name=self.__class__.__name__,
+#             status=self.type,
+#             path=self.path,
+#             is_file=self.is_file)
+#
+#
+#     def __eq__(self, other):
+#         if (self.type == other.type,
+#             self.path == other.path,
+#             self.is_file == other.is_file):
+#             return True
+#         return False
+#
+#
+#     def __hash__(self):
+#         return hash((self.type, self.path, self.is_file))
