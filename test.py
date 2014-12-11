@@ -3,10 +3,8 @@ Testing!
 """
 
 import os
-import os.path
 import stat
 import sys
-import unittest
 import shutil
 import tempfile
 import timeit
@@ -14,13 +12,12 @@ import time
 import platform
 import pytest
 import threading
+import contextlib
 
-import watchers
-from watchers import Watcher, PathPolling, Event, PYTHON32, DirectoryPolling, FilePolling, FileWatcher, SimpleWatcher, Manager, EVENT_TYPE_CREATED, EVENT_TYPE_DELETED, EVENT_TYPE_MODIFIED
+from watchers import *
 
 # For faster testing.
 CHECK_INTERVAL = 0.25
-
 SYSTEM_WINDOWS = True if platform.system().lower() == 'Windows' else False
 
 # Shortcuts.
@@ -35,14 +32,12 @@ def modify_file(path, data='update'):
         f.write(data)
 
 def delete(item):
-
     if os.path.isfile(item.path):
         os.remove(item.path)
     else:
         shutil.rmtree(item.path)
 
 def create(item):
-
     if item.is_file:
         create_file(item.path, data='')
     else:
@@ -54,7 +49,6 @@ def create(item):
 def pytest_generate_tests(metafunc):
 
     if metafunc.cls.__name__ == 'TestPathPolling':
-
         # Called once per each test function
         params = metafunc.cls.params.get(metafunc.function.__name__)
         if params:
@@ -63,18 +57,6 @@ def pytest_generate_tests(metafunc):
                 argvalues=[(path, (path, result)) for path, result in params],
                 ids=[path for path, result in params],
                 indirect=True)
-
-    elif metafunc.cls.__name__ == 'TestDirectoryPolling':
-
-        # Called once per each test function
-        params = metafunc.cls.params.get(metafunc.function.__name__)
-        if params:
-            metafunc.parametrize(
-                ['item', 'event'],
-                argvalues=[(path, (path, result)) for path, result in params],
-                ids=[path for path, result in params],
-                indirect=True)
-
 
 @pytest.fixture()
 def tmp_dir(request):
@@ -89,8 +71,6 @@ def tmp_dir(request):
 
     request.addfinalizer(fin)
 
-
-
 @pytest.fixture()
 def sample_files():
 
@@ -98,6 +78,7 @@ def sample_files():
     os.mkdir('dir')
     os.mkdir(os.path.join('dir', 'dir'))
     create_file(os.path.join('dir', 'file'), data='data')
+    create_file(os.path.join('dir', 'dir', 'file'), data='data')
 
 @pytest.fixture()
 def item(request):
@@ -112,8 +93,8 @@ def event(request):
         return None
     return Event(status, path, os.path.isfile(path))
 
-# Tests
 
+# Tests
 
 @pytest.mark.usefixtures("tmp_dir", "sample_files")
 class TestPathPolling:
@@ -348,7 +329,7 @@ class TestPathPolling:
 
     def test_delete_directory_from_content(self, item, event):
 
-        os.rmdir(os.path.join(item.path, 'dir'))
+        shutil.rmtree(os.path.join(item.path, 'dir'))
         assert item.poll() == event
 
     def test_overwrite_file_in_content(self, item, event):
@@ -368,7 +349,7 @@ class TestPathPolling:
 
         time.sleep(0.2)
 
-        os.rmdir(os.path.join(item.path, 'dir'))
+        shutil.rmtree(os.path.join(item.path, 'dir'))
         os.mkdir(os.path.join(item.path, 'dir'))
         create_file(os.path.join(item.path, 'dir', 'new_file'))
 
@@ -453,37 +434,16 @@ class TestPathPolling:
             assert item.called
 
 
-
-
-@pytest.fixture()
-def test_dir():
-
-    # file
-    # dir/file
-    # dir/dir/file
-
-    os.mkdir('dir')
-    os.mkdir(os.path.join('dir', 'dir'))
-
-    create_file('file', data='data')
-    create_file(os.path.join('dir', 'file'), data='data')
-    create_file(os.path.join('dir', 'dir', 'file'), data='data')
+# DirectoryPolling
 
 def create_events(*events):
-
     x = []
     for status, path, is_file in events:
         x.append(Event(status, path, is_file))
     return x
 
-@pytest.mark.usefixtures("tmp_dir", "test_dir")
+@pytest.mark.usefixtures("tmp_dir", "sample_files")
 class TestDirectoryPolling:
-    params = {}
-
-    # file
-    # dir/file
-    # dir/dir/file
-
 
     def test_walk_items(self):
 
@@ -532,6 +492,10 @@ class TestDirectoryPolling:
 
     def test_repr(self):
         assert repr(DirectoryPolling('.')) == "<DirectoryPolling: path=., is_recursive=False>"
+
+    # TODO: during _walk items are deleted
+    def test_walk_not_found(self):
+        pass
 
     # TODO: More filter tests
     def test_filter(self):
@@ -967,179 +931,60 @@ class TestDirectoryPolling:
             (EVENT_TYPE_DELETED, './dir/file', True),
         )
 
+#
+
+@contextlib.contextmanager
+def start_watcher(x):
+    x.start()
+    yield
+    x.join()
 
 
-
-
-
-
-
-
-
-
-
-
-class BaseTest:
-    """A base test class."""
-
-    # Watcher class
-    class_ = None
-    # Class __init__ attributes
-    kwargs = {}
-
-
-
+@pytest.mark.usefixtures("tmp_dir", "sample_files")
+class TestDirectoryWatcher:
 
     def test_interval(self):
-        """Should correctly set a custom check interval."""
 
-        x = self.class_(4, **self.kwargs)
-        self.assertEqual(4, x.interval)
+        x = DirectoryWatcher(5, '.')
+        assert x.interval == 5
 
-    def test_is_alive(self):
-        """Should correctly set is_alive property."""
+    def test_is_active(self):
 
-        x = self.class_(CHECK_INTERVAL, **self.kwargs)
-        self.assertFalse(x.is_alive)
+        x = DirectoryWatcher(CHECK_INTERVAL, '.')
 
-    def test_delete_during_check(self):
-        """Should skip files deleted by a other process during check."""
+        assert x.is_alive is False
+        assert x.start() is True
+        assert x.is_alive is True
+        assert x.stop() is True
+        assert x.is_alive is False
 
-        files = (self.temp_path, ['a.txt', 'b.txt'], [])
+    def test_start(self):
 
-        def walk(*args, **kwargs):
-            return [files]
+        x = DirectoryWatcher(CHECK_INTERVAL, '.')
+        assert x.start() is True
+        assert x.start() is False
+        x.stop()
 
-        original_walk = os.walk
-        os.walk = walk
+    def test_stop(self):
 
-        create_file('a.txt')
-        create_file('b.txt')
-        x = self.class_(CHECK_INTERVAL, **self.kwargs)
-        x.check()
-        delete_file('a.txt')
+        x = DirectoryWatcher(CHECK_INTERVAL, '.')
+        x.start()
+        assert x.stop() is True
+        assert x.stop() is False
 
-        try:
-            self.assertTrue(x.check())
-            files[1].remove('a.txt')
-            self.assertFalse(x.check())
-        except:
-            raise
-        finally:
-            os.walk = original_walk
+    # Threading
 
+    def test_create(self):
 
-class TesWatcher:
-    """A Watcher"""
+        x = DirectoryWatcher(CHECK_INTERVAL, '.')
+        x.on_created = lambda event: x.stop()
 
-    class_ = Watcher
-    kwargs = {
-        'path': '.'
-    }
-
-    def test_on_created(self, watcher):
-
-        def on_created(event):
-            watcher.stop()
-            watcher.called = True
-        watcher.on_created = on_created
-
-        threading.Thread(target=watcher.start).start()
-        create_file('new_file')
-        watcher.join()
-
-        assert watcher.called
-
-    def test_on_modified(self):
-        pass
-
-    def test_on_deleted(self):
-        pass
-
-
-    def test_override_events(self):
-        """Should run an overridden event methods with correct arguments."""
-
-        created = None
-        modified = None
-        deleted = None
-
-        class CustomWatcher(Watcher):
-            def on_created(self, item):
-                nonlocal created
-                created = item
-
-            def on_modified(self, item):
-                nonlocal modified
-                modified = item
-
-            def on_deleted(self, item):
-                nonlocal deleted
-                deleted = item
-
-        x = CustomWatcher(CHECK_INTERVAL, '.')
-
-        # Created file.
-
-        create_file('new.file')
-        x.check()
-        self.assertIsNotNone(created)
-        self.assertTrue(created.is_file)
-        self.assertEqual(created.path, os.path.abspath('new.file'))
-
-        # Modified file.
-
-        modify_file('new.file')
-        x.check()
-        self.assertIsNotNone(modified)
-        self.assertTrue(modified.is_file)
-        self.assertEqual(modified.path, os.path.abspath('new.file'))
-
-        # Deleted file.
-
-        delete_file('new.file')
-        x.check()
-        self.assertIsNotNone(deleted)
-        self.assertTrue(deleted.is_file)
-        self.assertEqual(deleted.path, os.path.abspath('new.file'))
+        with start_watcher(x):
+            create_file('new_file')
 
 
 
-    def test_thread(self):
-        """Can start a new thread to check a file system changes."""
 
-        i = False
-
-        class CustomWatcher(Watcher):
-            def on_created(self, item):
-                nonlocal i
-                i = True
-
-        x = CustomWatcher(CHECK_INTERVAL, '.')
-        # Watcher started correctly.
-        self.assertTrue(x.start())
-        # Watcher already started.
-        self.assertFalse(x.start())
-
-        create_file('new.file')
-
-        # Wait for check!
-        while not i:
-            pass
-
-        i = False
-        create_file('new.file2')
-
-        # Wait for another check!
-        while not i:
-            pass
-
-        self.assertTrue(x.is_alive)
-        # Watcher stopped correctly.
-        self.assertTrue(x.stop())
-        self.assertFalse(x.is_alive)
-        # Watcher already stopped.
-        self.assertFalse(x.stop())
 
 
 class TesSimpleWatcher:
@@ -1370,8 +1215,7 @@ class TesManager:
         m.stop()
 
 
-# Prevent testing base class.
-del BaseTest
+
 
 
 # Benchmark

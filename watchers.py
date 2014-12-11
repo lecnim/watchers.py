@@ -16,6 +16,7 @@ TODO: Better benchmark function
 import os
 import sys
 import threading
+import time
 from collections import namedtuple
 
 __version__ = '1.0.1-rc.1'
@@ -281,6 +282,7 @@ class DirectoryPolling:
                 x = [ExistsInvestigator(),
                      PermissionsInvestigator()]
 
+        # TODO: but when path not exists?
         return PathPolling(path, root=self.root, investigators=x)
 
     def _walk(self):
@@ -311,6 +313,29 @@ class DirectoryPolling:
 
             if not self.is_recursive:
                 break
+
+    # def investigate(self):
+    #
+    #     events = []
+    #
+    #     for item in self.items:
+    #         e = item.investigate()
+    #         if e:
+    #             events.append((item, e))
+    #
+    #     items = []
+    #     for i in self._walk():
+    #         item = self.create_item(i)
+    #         items.append(item)
+    #
+    #         if not self.item_exists(item):
+    #             events.append((item, Event(EVENT_TYPE_CREATED, item.path, item.is_file)))
+    #
+    #     events = self.sort_events(events)
+    #     self.dispatch_events(events)
+    #     self.items = items
+    #
+    #     return [i[1] for i in events]
 
     def poll(self):
 
@@ -363,6 +388,7 @@ class DirectoryPolling:
     def on_deleted(self, item):
         pass
 
+    # TODO:
     # What to do with this?
 
     def walk_dirs(self, top_down=True):
@@ -413,6 +439,37 @@ class DirectoryPolling:
                     self.directory_tree[root][1].append(i)
 
 
+# GroupPolling
+class BatchPolling:
+
+    def __init__(self):
+        self.pollers = []
+
+    def add(self, x):
+        self.pollers.append(x)
+
+    def remove(self, x):
+        self.pollers.remove(x)
+
+    # def investigate(self):
+    #     pass
+
+    def poll(self):
+
+        events = []
+
+        for i in self.pollers:
+            result = i.poll()
+            if isinstance(result, Event):
+                events.append(result)
+            else:
+                events.extend(result)
+
+        return events
+
+
+
+# Watcher classes.
 
 class BaseWatcher:
     """Base watcher class. All other watcher should inherit from this class."""
@@ -431,6 +488,10 @@ class BaseWatcher:
            or (self.check_thread and self.check_thread.is_alive()):
             return True
         return False
+
+    @property
+    def is_active(self):
+        return self.is_alive
 
     def check(self):
         """This method should be override by children classes.
@@ -490,65 +551,47 @@ class BaseWatcher:
         else:
             return False
 
+    def join(self):
+
+        # TODO: time.sleep? :(
+        while self.is_alive:
+            time.sleep(0.1)
 
 
-
-
-class FilePolling(PathPolling):
-    def __init__(self, path):
-        ItemPoller.__init__(self, path,
-                      investigators=[FileInvestigator, PermissionsInvestigator])
-
-
-
-class FileWatcher(BaseWatcher, PathPolling):
-    def __init__(self, interval, path):
-        BaseWatcher.__init__(self, interval)
-        ItemPoller.__init__(self, path,
-                      investigators=[FilePoller(self), PermissionsPoller(self)])
-
-
-
-class DirectoryWatcher():
-    pass
-
-class ItemWatcher(BaseWatcher, PathPolling):
-    """TODO"""
-
-    def __init__(self, interval, path):
-        BaseWatcher.__init__(self, interval)
-        ItemPoller.__init__(self, path)
-
-    def __repr__(self):
-        args = self.__class__.__name__, self.path
-        return "{}(path={!r})".format(*args)
-
-    def check(self):
-
-        return True if self.poll() else False
-
-
-
-
-
-class Watcher(BaseWatcher, DirectoryPolling):
-    """Watcher with events."""
-
+class DirectoryWatcher(BaseWatcher, DirectoryPolling):
     def __init__(self, interval, path, recursive=False, filter=None):
         BaseWatcher.__init__(self, interval)
-        Directory.__init__(self, path, recursive, filter)
-
-
+        DirectoryPolling.__init__(self, path, recursive, filter)
 
     def __repr__(self):
-        args = self.__class__.__name__, self.path, self.is_recursive
-        return "{}(path={!r}, recursive={!r})".format(*args)
-
+        return ("<{class_name}: interval={interval}, path={path}, "
+                "is_recursive={is_recursive}>").format(
+            class_name=self.__class__.__name__,
+            interval=self.interval,
+            path=self.path,
+            is_recursive=self.is_recursive)
 
     def check(self):
-        """Detects changes in a file system. Returns True if something changed."""
-
         return True if self.poll() else False
+
+
+class PathWatcher(BaseWatcher, PathPolling):
+    def __init__(self, interval, path):
+        BaseWatcher.__init__(self, interval)
+        PathPolling.__init__(self, path)
+
+    def __repr__(self):
+        return ("<{class_name}: interval={interval}, path={path}, "
+                "is_file={is_file}>").format(
+            class_name=self.__class__.__name__,
+            interval=self.interval,
+            path=self.path,
+            is_file=self.is_file)
+
+    def check(self):
+        return True if self.poll() else False
+
+
 
 
 
