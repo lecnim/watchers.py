@@ -445,57 +445,22 @@ def create_events(*events):
 @pytest.mark.usefixtures("tmp_dir", "sample_files")
 class TestDirectoryPolling:
 
-    def test_walk_items(self):
-
-        a = DirectoryPolling('.')
-        b = DirectoryPolling('.', recursive=True)
-
-        assert [i.path for i in a.walk_items()] == \
-               ['.',
-                os.path.join('.', 'file'),
-                os.path.join('.', 'dir')]
-        assert [i.path for i in b.walk_items()] == \
-               ['.',
-                os.path.join('.', 'file'),
-                os.path.join('.', 'dir'),
-                os.path.join('.', 'dir', 'file'),
-                os.path.join('.', 'dir', 'dir'),
-                os.path.join('.', 'dir', 'dir', 'file')]
-
-        # Reversed walk.
-
-        assert [i.path for i in a.walk_items(top_down=False)] == \
-               [os.path.join('.', 'file'),
-                os.path.join('.', 'dir'),
-                '.']
-        assert [i.path for i in b.walk_items(top_down=False)] == \
-               [os.path.join('.', 'dir', 'dir', 'file'),
-                os.path.join('.', 'dir', 'file'),
-                os.path.join('.', 'dir', 'dir'),
-                os.path.join('.', 'file'),
-                os.path.join('.', 'dir'),
-                '.']
-
-        # First directories, then files.
-
-        assert [i.path for i in a.walk_items(dirs_first=True)] == \
-               ['.',
-                os.path.join('.', 'dir'),
-                os.path.join('.', 'file')]
-        assert [i.path for i in b.walk_items(dirs_first=True)] == \
-               ['.',
-                os.path.join('.', 'dir'),
-                os.path.join('.', 'file'),
-                os.path.join('.', 'dir', 'dir'),
-                os.path.join('.', 'dir', 'file'),
-                os.path.join('.', 'dir', 'dir', 'file')]
-
     def test_repr(self):
         assert repr(DirectoryPolling('.')) == "<DirectoryPolling: path=., is_recursive=False>"
 
     # TODO: during _walk items are deleted
     def test_walk_not_found(self):
         pass
+
+    def test_path_not_found(self):
+
+        if PYTHON32:
+            e = OSError
+        else:
+            e = FileNotFoundError
+
+        with pytest.raises(e):
+            DirectoryPolling('not_found')
 
     # TODO: More filter tests
     def test_filter(self):
@@ -941,60 +906,169 @@ def start_watcher(x):
 
 
 @pytest.mark.usefixtures("tmp_dir", "sample_files")
-class TestDirectoryWatcher:
+class TestWatcher:
 
-    def test_interval(self):
-
-        x = DirectoryWatcher(5, '.')
-        assert x.interval == 5
+    # Running
 
     def test_is_active(self):
 
-        x = DirectoryWatcher(CHECK_INTERVAL, '.')
-
-        assert x.is_alive is False
-        assert x.start() is True
-        assert x.is_alive is True
-        assert x.stop() is True
-        assert x.is_alive is False
+        x = Watcher()
+        assert x.is_active is False
+        x.start()
+        assert x.is_active is True
+        x.stop()
+        assert x.is_active is False
 
     def test_start(self):
 
-        x = DirectoryWatcher(CHECK_INTERVAL, '.')
+        x = Watcher()
         assert x.start() is True
         assert x.start() is False
         x.stop()
 
     def test_stop(self):
 
-        x = DirectoryWatcher(CHECK_INTERVAL, '.')
+        x = Watcher()
         x.start()
         assert x.stop() is True
         assert x.stop() is False
 
-    # Threading
+    # Callbacks
 
-    def test_create(self):
+    def test_callback(self):
 
-        x = DirectoryWatcher(CHECK_INTERVAL, '.')
-        x.on_created = lambda event: x.stop()
+        x = Watcher(callback=lambda e: x.stop())
+        x.schedule(1, '.')
 
         with start_watcher(x):
             create_file('new_file')
 
+    def test_callback_events(self):
+
+        events = []
+        def on_callback(event):
+            events.append(event)
+            if len(events) == 3:
+                x.stop()
+
+        x = Watcher(callback=on_callback)
+        x.schedule(0.1, '.')
+
+        with start_watcher(x):
+            os.remove('file')
+            create_file('new_file')
+
+        assert events == create_events(
+            (EVENT_TYPE_CREATED, './new_file', True),
+            (EVENT_TYPE_DELETED, './file', True),
+            (EVENT_TYPE_MODIFIED, '.', False)
+        )
+
+    def test_on_callback(self):
+
+        x = Watcher()
+        x.on_callback = lambda e: x.stop()
+        x.schedule(0.1, '.')
+
+        with start_watcher(x):
+            create_file('new_file')
+
+    def test_custom_callback_method(self):
+
+        x = Watcher(callback='foo')
+        x.foo = lambda e: x.stop()
+        x.schedule(0.1, '.')
+
+        with start_watcher(x):
+            create_file('new_file')
+
+    # Tasks
+
+    def test_default_task(self):
+
+        class MyTask(Task):
+            def __init__(self, foo):
+                super().__init__()
+                self.foo = foo
+            def run(self):
+                yield self.foo
+
+        def callback(event):
+            x.stop()
+            assert event == 'hello'
+
+        x = Watcher(default_task=MyTask, callback=callback)
+        x.schedule(1, 'hello')
+
+        with start_watcher(x):
+            pass
+
+    def test_add_task(self):
+
+        events = []
+        def on_callback(event):
+            events.append(event)
+            if len(events) == 2:
+                x.stop()
+
+        x = Watcher(callback=on_callback)
+        x.schedule_task(1, Poll('.'), Poll('.'))
+
+        with start_watcher(x):
+            modify_file('file')
+
+        assert events == create_events(
+            (EVENT_TYPE_MODIFIED, './file', True),
+            (EVENT_TYPE_MODIFIED, './file', True)
+        )
+
+    # TODO
+    def test_add_task_to_already_started(self):
+        pass
+
+    # TODO:
+    def test_unschedule(self):
+        pass
+
+    # TODO:
+    def test_unschedule_all(self):
+        pass
+
+    #
+
+    def test_string_interval(self):
+
+        x = Watcher()
+
+        task = x.schedule('1hr', '.')
+        assert task.interval == 3600
+
+        task = x.schedule('0.5hr', '.')
+        assert task.interval == 1800
+
+        task = x.schedule('60min', '.')
+        assert task.interval == 3600
+
+        task = x.schedule('01:01:30', '.')
+        assert task.interval == 3690
+
+    def test_time_methods(self):
+
+        x = Watcher()
+
+        task = x.schedule(hours(1), '.')
+        assert task.interval == 3600
+
+        task = x.schedule(minutes(60), '.')
+        assert task.interval == 3600
 
 
+# TODO: Test Poll callback
+# TODO: Test PathPoll callback
 
 
-
-class TesSimpleWatcher:
+class TestSimpleWatcher:
     """A SimpleWatcher"""
-
-    class_ = SimpleWatcher
-    kwargs = {
-        'path': '.',
-        'target': lambda: True
-    }
 
     def test_callable(self):
         """Should run a callable when a file system changed."""
@@ -1004,45 +1078,10 @@ class TesSimpleWatcher:
             nonlocal i
             i = i + a + b
 
-        x = self.class_(CHECK_INTERVAL, '.', function, [1], {'b': 1})
+        x = SimpleDirectoryWatcher(CHECK_INTERVAL, '.', function, [1], {'b': 1})
         create_file('new.file')
-        x.check()
-        self.assertEqual(2, i)
-
-    def test_thread(self):
-        """Can start a new thread to check a file system changes."""
-
-        i = False
-        def function():
-            nonlocal i
-            i = True
-
-        x = self.class_(CHECK_INTERVAL, '.', function)
-        # Watcher started correctly.
-        self.assertTrue(x.start())
-        create_file('new.file')
-        # Watcher already started.
-        self.assertFalse(x.start())
-
-        # Wait for check!
-        while not i:
-            pass
-
-        i = False
-        create_file('new.file2')
-
-        # Wait for another check!
-        while not i:
-            pass
-
-        self.assertTrue(x.is_alive)
-        # Watcher stopped correctly.
-        thread = x.check_thread
-        self.assertTrue(x.stop())
-        self.assertFalse(thread.is_alive())
-        self.assertFalse(x.is_alive)
-        # Watcher already stopped.
-        self.assertFalse(x.stop())
+        x.loop()
+        assert i == 2
 
     def test_stop_in_check(self):
         """Can stop watcher from called function."""
@@ -1052,167 +1091,28 @@ class TesSimpleWatcher:
             # be dead, because stop() is run by the check thread!
             x.stop()
 
-        x = self.class_(CHECK_INTERVAL, '.', function)
+        x = SimpleDirectoryWatcher(CHECK_INTERVAL, '.', function)
         x.args = (x,)
         create_file('new.file')
         x.start()
+        x.join()
 
-        while x.is_alive:
-            pass
-
-        self.assertFalse(x.is_alive)
+        assert x.is_alive is False
 
     def test_is_alive(self):
         """Should set a is_alive attribute to False only if all check threads are dead"""
 
-        thread = None
         def function(x):
-            nonlocal thread
-            thread = x.check_thread
             x.stop()
             time.sleep(2)
 
-        x = self.class_(CHECK_INTERVAL, '.', function)
+        x = SimpleDirectoryWatcher(CHECK_INTERVAL, '.', function)
         x.args = (x,)
         x.start()
         create_file('new.file')
+        x.join()
 
-        while x.is_alive:
-            pass
-
-        self.assertFalse(thread.is_alive())
-
-
-class TesManager:
-    """A Manager"""
-
-    def setUp(self):
-
-        # Create temporary directory with example files and change current
-        # working directory to it.
-        self.cwd = os.getcwd()
-        self.temp_path = create_test_files()
-        os.chdir(self.temp_path)
-
-    def tearDown(self):
-
-        # Go to previous working directory and clear temp files.
-        os.chdir(self.cwd)
-        shutil.rmtree(self.temp_path)
-
-    def test_repr(self):
-        print(Manager())
-
-    def test_start_stop(self):
-        """Should start() all watchers and stop() all watchers."""
-
-        m = Manager()
-        a = Watcher(CHECK_INTERVAL, '.')
-        b = Watcher(CHECK_INTERVAL, '.')
-
-        self.assertFalse(a.is_alive)
-        self.assertFalse(b.is_alive)
-        m.add(a)
-        m.add(b)
-
-        m.start()
-        self.assertTrue(a.is_alive)
-        self.assertTrue(b.is_alive)
-        m.stop()
-        self.assertFalse(a.is_alive)
-        self.assertFalse(b.is_alive)
-
-    def test_add(self):
-        """Can add watchers."""
-
-        m = Manager()
-        a = Watcher(CHECK_INTERVAL, '.')
-
-        self.assertTrue(m.add(a))
-        self.assertIn(a, m.watchers)
-        self.assertFalse(a.is_alive)
-
-        m.start()
-        self.assertTrue(a.is_alive)
-
-        # Adding watchers to started manager.
-        b = Watcher(CHECK_INTERVAL, '.')
-        m.add(b)
-        self.assertIn(a, m.watchers)
-        self.assertFalse(b.is_alive)
-        m.stop()
-
-    def test_remove(self):
-        """Can remove watchers."""
-
-        m = Manager()
-        a = Watcher(CHECK_INTERVAL, '.')
-        b = Watcher(CHECK_INTERVAL, '.')
-        m.add(a)
-        m.add(b)
-
-        self.assertTrue(m.remove(a))
-        self.assertNotIn(a, m.watchers)
-
-        # Removing watcher from started manager.
-
-        m.start()
-        m.remove(b)
-        self.assertNotIn(b, m.watchers)
-        m.stop()
-
-        # Exceptions.
-
-        self.assertRaises(KeyError, m.remove, Watcher(CHECK_INTERVAL, '.'))
-
-    def test_clear(self):
-        """Can remove all watchers."""
-
-        m = Manager()
-        a = Watcher(CHECK_INTERVAL, '.')
-        m.add(a)
-        m.clear()
-
-        self.assertFalse(m.watchers)
-
-    def test_thread(self):
-        """Can start a new thread to check each watcher."""
-
-        i = False
-
-        class CustomWatcher(Watcher):
-            def on_created(self, item):
-                nonlocal i
-                i = True
-
-        m = Manager()
-        a = CustomWatcher(CHECK_INTERVAL, '.')
-        m.add(a)
-
-        m.start()
-        for k in range(10):
-            m.add(Watcher(CHECK_INTERVAL, '.'))
-        create_file('new.file')
-
-        while not i:
-            pass
-
-        m.stop()
-        self.assertEqual([], [i for i in m.watchers if i.is_alive])
-
-    def test_change_watchers_in_check(self):
-        """Should handle changing watchers set during check() method."""
-
-        m = Manager()
-
-        def function():
-            m.add(Watcher(CHECK_INTERVAL, '.'))
-
-        x = SimpleWatcher(CHECK_INTERVAL, '.', function)
-        m.add(x)
-        create_file('new.file')
-        m.start()
-        m.stop()
+        assert x.is_alive is False
 
 
 
@@ -1231,12 +1131,12 @@ def benchmark(times=1000):
     msg = 'Watching {} files in {} directories.'.format(8 * times, 2 * times)
     print(msg)
 
-    x = timeit.timeit('Watcher(1, ".", recursive=True).check()',
-                      setup='from watchers import Watcher', number=times)
+    x = timeit.timeit('DirectoryWatcher(1, ".", recursive=True).check()',
+                      setup='from watchers import DirectoryWatcher', number=times)
 
     sample = round(x / (8 * times) * 1000, 3)
 
-    print('Watcher: \t{} s. one file: {} ms.'.format(round(x, 3), sample))
+    print('DirectoryWatcher: \t{} s. one file: {} ms.'.format(round(x, 3), sample))
 
     x = timeit.timeit(
         'SimpleWatcher(1, ".", target=lambda: 1, recursive=True).check()',

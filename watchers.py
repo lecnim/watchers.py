@@ -6,12 +6,12 @@ Script that monitors changes in the file system using watchers instances.
 TODO: Documentation
 TODO: Better benchmark function
 
-"""
-
+FAT32:
 # 2 seconds for last modified time,
 # 10 ms for creation time,
 # 1 day for access date,
 # 2 seconds for deletion time
+"""
 
 import os
 import sys
@@ -36,7 +36,15 @@ EVENT_TYPE_DELETED = 'deleted'
 Event = namedtuple('Event', ['type', 'path', 'is_file'])
 
 
-# Investigators
+# Useful functions.
+
+def hours(x):
+    return x * 3600
+def minutes(x):
+    return x * 60
+
+
+# Investigators.
 
 class Investigator:
     """Detects changes in a file system."""
@@ -243,15 +251,15 @@ class DirectoryPolling:
         # root + path
         self.full_path = os.path.join(self.root, path)
 
+        # TODO: Better raising path not found
+        os.stat(self.full_path)
+
         self.is_recursive = recursive
         # Callable that checks ignored items_paths.
         self.filter = filter
 
         # List of PathPolling instances.
         self.items = [self.create_item(path) for path in self._walk()]
-
-        self.directory_tree = {}
-        self.update_tree()
 
     def __repr__(self):
         return ("<{class_name}: path={path}, "
@@ -314,30 +322,7 @@ class DirectoryPolling:
             if not self.is_recursive:
                 break
 
-    # def investigate(self):
-    #
-    #     events = []
-    #
-    #     for item in self.items:
-    #         e = item.investigate()
-    #         if e:
-    #             events.append((item, e))
-    #
-    #     items = []
-    #     for i in self._walk():
-    #         item = self.create_item(i)
-    #         items.append(item)
-    #
-    #         if not self.item_exists(item):
-    #             events.append((item, Event(EVENT_TYPE_CREATED, item.path, item.is_file)))
-    #
-    #     events = self.sort_events(events)
-    #     self.dispatch_events(events)
-    #     self.items = items
-    #
-    #     return [i[1] for i in events]
-
-    def poll(self):
+    def _investigate_items(self):
 
         events = []
 
@@ -355,9 +340,16 @@ class DirectoryPolling:
                 events.append((item, Event(EVENT_TYPE_CREATED, item.path, item.is_file)))
 
         events = self.sort_events(events)
-        self.dispatch_events(events)
         self.items = items
+        return events
 
+    def investigate(self):
+        return [i[1] for i in self._investigate_items()]
+
+    def poll(self):
+
+        events = self._investigate_items()
+        self.dispatch_events(events)
         return [i[1] for i in events]
 
     def sort_events(self, x):
@@ -388,104 +380,24 @@ class DirectoryPolling:
     def on_deleted(self, item):
         pass
 
-    # TODO:
-    # What to do with this?
 
-    def walk_dirs(self, top_down=True):
+# Timer.
 
-        items = self.items if top_down else reversed(self.items)
-
-        for i in items:
-            if not i.is_file:
-                yield i.path
-
-    def walk_items(self, top_down=True, dirs_first=False):
-
-        if top_down:
-            yield self.items[0]
-
-        for path in self.walk_dirs(top_down):
-            items_order = [1, 0] if dirs_first else [0, 1]
-            for x in items_order:
-                for item in self.directory_tree[path][x]:
-                    yield item
-
-        if not top_down:
-            yield self.items[0]
-
-    def update_tree(self):
-
-        self.directory_tree = {}
-
-        for i in self.items:
-
-            if not i.is_file:
-                if not i.path in self.directory_tree:
-                    # self.paths[i.path] = {'files': [], 'dirs': []}
-                    # self.dirs.append(i.path)
-
-                    self.directory_tree[i.path] = [], []
-
-            if i.path != self.path:
-
-                root = os.path.dirname(i.path)
-
-                if i.is_file:
-                    # self.paths[root]['files'].append(i)
-
-                    self.directory_tree[root][0].append(i)
-                else:
-                    # self.paths[root]['dirs'].append(i)
-                    self.directory_tree[root][1].append(i)
-
-
-# GroupPolling
-class BatchPolling:
+class Timer:
+    """Repeats self.loop() method every interval."""
 
     def __init__(self):
-        self.pollers = []
-
-    def add(self, x):
-        self.pollers.append(x)
-
-    def remove(self, x):
-        self.pollers.remove(x)
-
-    # def investigate(self):
-    #     pass
-
-    def poll(self):
-
-        events = []
-
-        for i in self.pollers:
-            result = i.poll()
-            if isinstance(result, Event):
-                events.append(result)
-            else:
-                events.extend(result)
-
-        return events
-
-
-
-# Watcher classes.
-
-class BaseWatcher:
-    """Base watcher class. All other watcher should inherit from this class."""
-
-    def __init__(self, interval):
 
         self._is_alive = False
+        self.thread = None
         self.lock = threading.Lock()
-        self.check_thread = None
-        # Amount of time (in seconds) between running polling methods.
-        self.interval = interval
+        # Amount of time (in seconds) between running run() method.
+        self.interval = None
 
     @property
     def is_alive(self):
         if self._is_alive \
-           or (self.check_thread and self.check_thread.is_alive()):
+           or (self.thread and self.thread.is_alive()):
             return True
         return False
 
@@ -493,18 +405,18 @@ class BaseWatcher:
     def is_active(self):
         return self.is_alive
 
-    def check(self):
-        """This method should be override by children classes.
-        Attribute self.interval sets how often it is executed."""
+    #
+
+    def loop(self):
         pass
 
-    def _prepare_check(self):
-        """This method is run in the Timer thread and it triggers check() method."""
+    def _start_loop(self, interval):
+        """This method is run in the Timer thread and it triggers check()"""
 
-        self.check()
-        self._start_timer_thread()
+        self.loop()
+        self._start_timer(interval)
 
-    def _start_timer_thread(self, check_interval=None):
+    def _start_timer(self, interval):
         """Starts new Timer thread, it will run check after time interval."""
 
         # Lock pauses stop() method.
@@ -512,73 +424,98 @@ class BaseWatcher:
         # execution of this method.
         with self.lock:
             if self._is_alive:
+                self.thread = threading.Timer(
+                    interval, self._start_loop, args=[interval])
+                self.thread.name = repr(self)
+                self.thread.daemon = True
+                self.thread.start()
 
-                if check_interval is None:
-                    check_interval = self.interval
+    #
 
-                self.check_thread = threading.Timer(check_interval,
-                                                    self._prepare_check)
-                self.check_thread.name = repr(self)
-                self.check_thread.daemon = True
-                self.check_thread.start()
+    def start(self, interval):
+        """Starts task. Returns False if the task has already started."""
 
-    def start(self):
-        """Starts watching. Returns False if the watcher is already started."""
+        self.interval = interval
 
         if self._is_alive:
             return False
 
         self._is_alive = True
-        self._start_timer_thread(0)
+        self._start_loop(interval)
         return True
 
     def stop(self):
-        """Stops watching. Returns False if the watcher is already stopped."""
+        """Stops watching. Returns False if the watcher has already stopped."""
 
         if self._is_alive:
 
             # Lock prevents starting new Timer threads.
             with self.lock:
                 self._is_alive = False
-                self.check_thread.cancel()
+                if self.thread:
+                    self.thread.cancel()
 
             # Timer thread canceled, wait for join it.
-            if threading.current_thread() != self.check_thread:
-                self.check_thread.join()
+            if self.thread and threading.current_thread() != self.thread:
+                self.thread.join()
+
+            self.interval = None
             return True
 
         # Watcher already stopped.
-        else:
-            return False
+        return False
 
     def join(self):
-
+        """Waits until the timer is stopped."""
         # TODO: time.sleep? :(
         while self.is_alive:
             time.sleep(0.1)
 
 
-class DirectoryWatcher(BaseWatcher, DirectoryPolling):
-    def __init__(self, interval, path, recursive=False, filter=None):
-        BaseWatcher.__init__(self, interval)
-        DirectoryPolling.__init__(self, path, recursive, filter)
+# Callback.
 
-    def __repr__(self):
-        return ("<{class_name}: interval={interval}, path={path}, "
-                "is_recursive={is_recursive}>").format(
-            class_name=self.__class__.__name__,
-            interval=self.interval,
-            path=self.path,
-            is_recursive=self.is_recursive)
+class Callback:
 
-    def check(self):
-        return True if self.poll() else False
+    def __init__(self, callback='on_callback'):
+
+        if callable(callback) or isinstance(callback, str):
+            self.callbacks = [callback]
+        else:
+            self.callbacks = callback
+
+    def iter_callbacks(self):
+
+        for x in self.callbacks:
+            if isinstance(x, str):
+                x = getattr(self, x)
+            yield x
+
+    def on_callback(self, event):
+        pass
 
 
-class PathWatcher(BaseWatcher, PathPolling):
-    def __init__(self, interval, path):
-        BaseWatcher.__init__(self, interval)
+# Task classes.
+
+class Task(Timer, Callback):
+    """..."""
+
+    def __init__(self, callback='on_callback'):
+        Timer.__init__(self)
+        Callback.__init__(self, callback)
+
+    def loop(self):
+        for x in self.run():
+            for callback in self.iter_callbacks():
+                callback(x)
+
+    def run(self):
+        yield
+
+
+class PollPath(PathPolling, Task):
+    def __init__(self, path, callback='on_callback'):
         PathPolling.__init__(self, path)
+        Task.__init__(self, callback)
 
     def __repr__(self):
         return ("<{class_name}: interval={interval}, path={path}, "
@@ -588,158 +525,143 @@ class PathWatcher(BaseWatcher, PathPolling):
             path=self.path,
             is_file=self.is_file)
 
-    def check(self):
-        return True if self.poll() else False
+    def run(self):
+        event = self.poll()
+        if event:
+            yield event
 
 
+class Poll(DirectoryPolling, Task):
+    def __init__(self, path, recursive=False, filter=None, callback='on_callback'):
+        DirectoryPolling.__init__(self, path, recursive, filter)
+        Task.__init__(self, callback)
+
+    def __repr__(self):
+        return ("<{class_name}: interval={interval}, path={path}, "
+                "is_recursive={is_recursive}>").format(
+            class_name=self.__class__.__name__,
+            interval=self.interval,
+            path=self.path,
+            is_recursive=self.is_recursive)
+
+    def run(self):
+        for i in self.poll():
+            yield i
 
 
+# Watchers.
+
+class Watcher(Callback):
 
 
+    def __init__(self, default_task=Poll, callback='on_callback'):
+        super().__init__(callback)
+
+        self.default_task = default_task
+        self.tasks = []
+        self.is_active = False
+
+    #
+
+    def schedule(self, interval, *args, **kwargs):
+        x = self.default_task(*args, **kwargs)
+        self.schedule_task(interval, x)
+        return x
+
+    def schedule_task(self, interval, *tasks):
+
+        if isinstance(interval, str):
+            if 'hr' in interval:
+                interval = float(interval.split('hr')[0]) * 3600
+            elif 'min' in interval:
+                interval = float(interval.split('min')[0]) * 60
+            elif ':' in interval:
+                h, m, s = interval.split(':')
+                interval = int(h) * 3600 + int(m) * 60 + int(s)
+
+        for x in tasks:
+            self.tasks.append(x)
+            x.interval = interval
+            x.callbacks.append(self._task_callback)
+
+            if self.is_active:
+                x.start(interval)
+
+    def _task_callback(self, event):
+        for function in self.iter_callbacks():
+            function(event)
+
+    def unschedule(self, *tasks):
+        for i in tasks:
+            self.unschedule_task(i)
+
+    def unschedule_task(self, x):
+        x.stop()
+        self.tasks.remove(x)
+
+    def unschedule_all(self):
+        for i in self.tasks:
+            self.unschedule_task(i)
+
+    #
+
+    def start(self):
+
+        if self.is_active:
+            return False
+
+        for i in self.tasks:
+            i.start(i.interval)
+
+        self.is_active = True
+        return True
+
+    def stop(self):
+
+        if not self.is_active:
+            return False
+
+        for i in self.tasks:
+            i.stop()
+
+        self.is_active = False
+        return True
+
+    def join(self):
+        # TODO: time.sleep :(
+        while self.is_active:
+            time.sleep(0.1)
 
 
+# SimpleWatcher
 
-class SimpleWatcher(BaseWatcher):
-    """A Watcher that runs callable when file system has changed."""
+class SimpleDirectoryWatcher(Poll):
 
     def __init__(self, interval, path, target, args=(), kwargs=None,
                  recursive=False, filter=None):
-        super().__init__(interval)
 
-        self.path = os.path.abspath(path)
-        self.is_recursive = recursive
-        self.filter = filter
+        Poll.__init__(self, path, recursive, filter)
 
+        self.interval = interval
         self.target = target
         self.args = args
         self.kwargs = {} if not kwargs else kwargs
 
-        self.snapshot = self._get_snapshot()
-
-    def __repr__(self):
-        args = self.__class__.__name__, self.path, self.is_recursive
-        return "{}(path={!r}, recursive={!r})".format(*args)
-
-    def _filtered_paths(self, root, paths):
-        """Yields filtered items_paths using self.filter and skips deleted ones."""
-
-        for i in paths:
-            if self.filter and not self.filter(os.path.join(root, i)):
-                continue
-
-            path = os.path.join(root, i)
-            try:
-                stats = os.stat(path)
-            # A path could be deleted during execution of this method.
-            except (IOError, OSError):
-                pass
-            else:
-                yield path, stats
-
-    def _get_snapshot(self):
-        """Returns set with all items_paths in self.path location."""
-
-        snapshot = set()
-
-        for path, dirs, files in os.walk(self.path):
-
-            # Files.
-            for p, stats in self._filtered_paths(path, dirs):
-                snapshot.add((
-                    p, stats.st_mode, stats.st_uid, stats.st_gid
-                ))
-
-            # Directories.
-            for p, stats in self._filtered_paths(path, files):
-                snapshot.add((
-                    p,
-                    stats.st_mode, stats.st_uid, stats.st_gid,
-                    stats.st_mtime if PYTHON32 else stats.st_mtime_ns,
-                    stats.st_size
-                ))
-
-            if not self.is_recursive:
-                break
-        return snapshot
-
-    def check(self):
+    def loop(self):
         """Detects changes in a file system. Returns True if something changed."""
 
-        s = self._get_snapshot()
-        if self.snapshot != s:
+        if self.poll():
             self.target(*self.args, **self.kwargs)
-            self.snapshot = s
             return True
         return False
-
-
-class Manager:
-    """Manager, class that gather watcher instances in one place."""
-
-    def __init__(self):
-        self.watchers = set()
-        self.watchers_lock = threading.Lock()
-
-    def __repr__(self):
-        args = self.__class__.__name__, len(self.watchers)
-        return "{}(watchers={!r})".format(*args)
-
-    def add(self, watcher):
-        """Adds a watcher instance to this manager. Returns False if the manager
-        already has this watcher."""
-
-        if not watcher in self.watchers:
-
-            # Adding to set is thread-safe?
-            with self.watchers_lock:
-                self.watchers.add(watcher)
-            return True
-        return False
-
-    def remove(self, watcher):
-        """Removes a watcher instance from this manager.
-        Raises KeyError if a watcher is not available in the manager."""
-
-        # Removing from set is thread-safe?
-        with self.watchers_lock:
-            try:
-                self.watchers.remove(watcher)
-            except KeyError:
-                raise KeyError('Manager.remove(x): watcher x not in manager')
-        return True
-
-    def clear(self):
-        """Removes all watchers instances from this manager. Remember that this
-        method do not stops them."""
-
-        with self.watchers_lock:
-            self.watchers = set()
 
     def start(self):
-        """Starts all watchers, skips already started ones."""
+        Poll.start(self, self.interval)
 
-        # with self.watchers_lock:
-        for i in self.watchers.copy():
-            if not i.is_alive:
-                i.start()
 
-    def stop(self):
-        """Stops all watchers."""
 
-        # with self.watchers_lock:
-        for i in self.watchers.copy():
-            if i.is_alive:
-                i.stop()
 
-    def check(self):
-        """Triggers check in each watcher instance."""
 
-        with self.watchers_lock:
-            x = self.watchers.copy()
-
-        # With this lock threads cannot modify self.watcher.
-        for i in x:
-            i.check()
 
 
 #
