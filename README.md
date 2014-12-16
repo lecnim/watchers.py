@@ -4,14 +4,14 @@ watchers.py
 [![Build Status](https://travis-ci.org/lecnim/watchers.py.png?branch=master)](https://travis-ci.org/lecnim/watchers.py)
 
 A simple script that monitors changes in the file system using polling.
-Useful for small, platform independent projects that don't need complex
+Useful for small, platform independent projects which don't need complex
 libraries like great [watchdog](https://github.com/gorakhargosh/watchdog).
 
 ### Facts or why you should take a good look at watchers.py:
 
 - No dependencies, only Python `3.2`, `3.3` or `3.4`
 - Supports __Windows__ and __Unix__
-- Only one file, less than __12 KB__
+- Only one file, less than __20 KB__
 - Simple and minimalistic
 
 
@@ -23,11 +23,13 @@ A simple program that uses watchers.py to monitor specified directory in
 
 ```python
 
-from watchers import SimpleWatcher
+from watchers import Watcher
 
-def foo():
-    print('Something has changed in directory!')
-x = SimpleWatcher(2, 'path/to/dir', foo)
+def log(event):
+    print(event)
+
+x = Watcher(callback=log)
+x.schedule(2, 'path/to/file')
 x.start()
 ```
 
@@ -74,110 +76,122 @@ More Examples
 
 ```python
 
-# Use a SimpleWatcher to run a function when there is a change in a directory.
+# Generally Task classes generates Events instances when there is a change
+# in the file system. All this events are later send to callback method, one
+# by one.
 
-from watchers import SimpleWatcher
+# Here there is a Poll task which monitors changes in a given directory and
+# sends events to the foo() method.
 
-def foo():
-    print('Something has changed in directory!')
-# Watch a 'path/to/dir' location in 2 seconds intervals and run a foo() when
-# change is detected.
-x = SimpleWatcher(2, 'path/to/dir', foo)
-# Use start() to start watching.
-x.start()
-# You can stop Watcher using stop():
-x.stop()
-# Or use is_alive property if you want to know if watcher is still running:
-if x.is_alive:
-    print('HE IS ALIVE AND HE IS WATCHING!')
+def foo(event):
 
-# Passing arguments to a function:
+    # There a three types of default Event.
+    if event.type == 'created':
+        # Path was created.
+        pass
+    if event.type == 'modified':
+        # Path was modified.
+        pass
+    if event.type == 'deleted':
+        # Path was deleted.
+        pass
 
-def foo(a, what):
-    print(a, what)
-SimpleWatcher(10, 'path/to/dir', foo, args=('Hello',), kwargs={'what': 'World'})
+    event.path      # Event source, for example: 'path/to/file'
+    event.is_file   # Detects if path is a file or directory.
 
-# There is also a recursive mode:
+task = Poll('my/documents', callback=foo)
 
-SimpleWatcher(0.25, 'path/to/dir', foo, recursive=True)
+# When you start a task you must set time interval used for repeating.
+# In this situation task will be repeated after 10 seconds again and again.
+task.start(10)
 
-# You can ignore specific files or directories using a filter argument:
+# Use is_active property to detects if task is running.
+if task.is_active:
+    print('IT IS ALIVE!')
+
+# join() method waits until task is stopped. Obviously you can stop task
+# using stop() method.
+task.join()
+task.stop()
+
+# When an argument callback is missing, a task will use the on_callback()
+# method instead.
+
+class MyTask(Poll):
+    def on_callback(self, event):
+        print(event)
+task = MyTask('path/to/directory')
+
+# You can monitor a directory including all subdirectories using recursive argument.
+Poll('my/documents', recursive=True, callback=foo)
+
+# Use filter argument to skip paths that you do not want to monitor.
 
 def shall_not_pass(path):
-    """Ignore all paths which ends with '.html'"""
-    if path.endswith('.html'):
-        # Path will be ignored!
-        return False
-    return True
-
-SimpleWatcher(2, 'path/to/dir', foo, filter=shall_not_pass)
+    return False if path.endswith('.html') else True
+Poll('my/documents', filter=shall_not_pass, callback=foo)
 
 
+# PathPoll task is used to monitor only one given path. For example you can
+# monitor one specific file or one specific directory.
 
-# Use a Watcher class to have a better control over file system events.
-
-from watchers import Watcher
-
-class MyWatcher(Watcher):
-
-    # Runs when a file or a directory is modified.
-    def on_modified(self, item):
-
-        # Argument item has some interesting properties like:
-
-        item.path       # A path to created item.
-        item.is_file    # Checks if an item is a file or a directory.
-        item.stat       # An os.stat() result.
-
-    # Runs when a file or a directory is created.
-    def on_created(self, item):
-        pass
-    # Runs when a file or a directory is deleted.
-    def on_deleted(self, item):
-        pass
-
-# Checks 'path/to/dir' location every 10 seconds.
-w = MyWatcher(10, 'path/to/dir')
-w.start()
-
-# A Watcher class supports a filter, recursive and check_interval arguments
-# just like a SimpleWatcher class:
-
-Watcher(10, 'path/to/dir', recursive=True, filter=lambda x: True)
+task = PathPoll('path/to/file', callback=foo)
+task.start(12)
 
 
 
-# A Manager class can group watchers instances and checks each of it:
+# Watcher class collects many tasks in one place.
+watcher = Watcher()
 
-from watchers import Manager
+# You can add task to Watcher using the schedule_task() method. Notice that 
+# time intervals are set when tasks are scheduled.
+task = Poll('my/documents')
+watcher.schedule_task(12, task)
 
-manager = Manager()
-manager.add(Watcher(2, 'path/to/file'))
-manager.add(SimpleWatcher(0.1, 'path/to/file', foo))
+# When Watcher starts it also starts all collected tasks.
+watcher.start()
+watcher.is_active # True
 
-# Two watchers will start and look for changes:
-manager.start()
+# Task is started immediately when added to already running watcher.
+watcher.start()
+task = Poll('images')
+watcher.schedule_task(10, task)
+task.is_active # True
 
-# You can access grouped watchers using a Manager.watchers property:
-for i in manager.watchers:
-    print(i)
+# stop() and join() methods are also supported.
+watcher.join()
+watcher.stop()
 
-# There is no problem with adding or removing watchers when a manager
-# is running:
-w = Watcher(10, 'path/to/file')
-manager.add(w)
-manager.remove(w)
+# You can remove task from watcher using unschedule() method.
+# Unscheduled task is stopped immediately.
+watcher.unschedule(task)
+# Or use unschedule_all() to remove all collected tasks.
+watcher.unschedule_all()
 
-# But remember that manager do not start added watcher...
-manager.add(w)
-w.start()
-# ... and do NOT stop during removing!
-manager.remove(w)
-w.stop()
 
-# Removing all watchers with one call:
-manager.clear()
-# Remember to stop manager!
-manager.stop()
+# By default the schedule() method is a shortcut for scheduling Poll tasks.
+watcher.schedule(10, 'my/documents', callback=foo)
+
+# You can change default schedule() task using default_task argument.
+# Here schedule() will use a PathPoll task instead of a default Poll task.
+watcher = Watcher(default_task=PathPoll)
+watcher.schedule(10, 'my/file', callback=foo)
+
+# The schedule() method always returns a Task instance, so for example you can
+# unschedule this task later.
+task = watcher.schedule(6, 'my/file')
+watcher.unschedule(task)
+
+
+# Watcher supports callback method just like tasks. In this situation event is
+# send to the task callback first and then to the watcher callback.
+
+def foo(event):
+    print('Task callback', event)
+def bar(event):
+    print('Watchers callback', event)
+
+watcher = Watcher(callback=bar)
+watcher.schedule(10, 'my/documents', callback=foo)
 
 ```

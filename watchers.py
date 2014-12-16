@@ -19,7 +19,7 @@ import threading
 import time
 from collections import namedtuple
 
-__version__ = '1.0.1-rc.1'
+__version__ = '2.0.0-alpha'
 
 # Minimum python 3.2
 if sys.hexversion < 0x030200F0:
@@ -561,6 +561,11 @@ class Watcher(Callback):
         self.tasks = []
         self.is_active = False
 
+    def __repr__(self):
+        return "<{class_name}: is_active={is_active}>".format(
+            class_name=self.__class__.__name__,
+            is_active=self.is_active)
+
     #
 
     def schedule(self, interval, *args, **kwargs):
@@ -601,7 +606,8 @@ class Watcher(Callback):
 
     def unschedule_all(self):
         for i in self.tasks:
-            self.unschedule_task(i)
+            i.stop()
+        self.tasks.clear()
 
     #
 
@@ -635,7 +641,7 @@ class Watcher(Callback):
 
 # SimpleWatcher
 
-class SimpleDirectoryWatcher(Poll):
+class SimpleWatcher(Poll):
 
     def __init__(self, interval, path, target, args=(), kwargs=None,
                  recursive=False, filter=None):
@@ -646,6 +652,11 @@ class SimpleDirectoryWatcher(Poll):
         self.target = target
         self.args = args
         self.kwargs = {} if not kwargs else kwargs
+
+    def __repr__(self):
+        return "<{class_name}: is_active={is_active}>".format(
+            class_name=self.__class__.__name__,
+            is_active=self.is_active)
 
     def loop(self):
         """Detects changes in a file system. Returns True if something changed."""

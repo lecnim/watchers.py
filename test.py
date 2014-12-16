@@ -18,7 +18,7 @@ from watchers import *
 
 # For faster testing.
 CHECK_INTERVAL = 0.25
-SYSTEM_WINDOWS = True if platform.system().lower() == 'Windows' else False
+SYSTEM_WINDOWS = True if platform.system().lower() == 'windows' else False
 
 # Shortcuts.
 
@@ -446,7 +446,8 @@ def create_events(*events):
 class TestDirectoryPolling:
 
     def test_repr(self):
-        assert repr(DirectoryPolling('.')) == "<DirectoryPolling: path=., is_recursive=False>"
+        assert repr(DirectoryPolling('.')) == "<DirectoryPolling: path=., " \
+                                              "is_recursive=False>"
 
     # TODO: during _walk items are deleted
     def test_walk_not_found(self):
@@ -463,6 +464,7 @@ class TestDirectoryPolling:
             DirectoryPolling('not_found')
 
     # TODO: More filter tests
+    # TODO: Filter directory, what about it content?
     def test_filter(self):
 
         def ignore(path):
@@ -483,6 +485,8 @@ class TestDirectoryPolling:
             (EVENT_TYPE_MODIFIED, '.', False),
             (EVENT_TYPE_MODIFIED, './dir', False)
         )
+
+    # TODO: Test filter root dir
 
     # Swap
 
@@ -908,6 +912,9 @@ def start_watcher(x):
 @pytest.mark.usefixtures("tmp_dir", "sample_files")
 class TestWatcher:
 
+    def test_repr(self):
+        assert repr(Watcher()) == "<Watcher: is_active=False>"
+
     # Running
 
     def test_is_active(self):
@@ -984,6 +991,16 @@ class TestWatcher:
 
     # Tasks
 
+    def test_schedule(self):
+
+        x = Watcher()
+        task = x.schedule(10, '.')
+
+        assert task.interval == 10
+        assert task.path == '.'
+        assert task.is_active is False
+        assert task in x.tasks
+
     def test_default_task(self):
 
         class MyTask(Task):
@@ -1003,7 +1020,7 @@ class TestWatcher:
         with start_watcher(x):
             pass
 
-    def test_add_task(self):
+    def test_schedule_task(self):
 
         events = []
         def on_callback(event):
@@ -1022,17 +1039,35 @@ class TestWatcher:
             (EVENT_TYPE_MODIFIED, './file', True)
         )
 
-    # TODO
-    def test_add_task_to_already_started(self):
-        pass
+    def test_schedule_after_start(self):
 
-    # TODO:
+        x = Watcher()
+        x.start()
+        task = x.schedule(1, '.')
+
+        assert task.is_active is True
+
     def test_unschedule(self):
-        pass
 
-    # TODO:
+        x = Watcher()
+        task = x.schedule(1, '.')
+        x.start()
+
+        assert task.is_active is True
+        x.unschedule(task)
+        assert task.is_active is False
+        assert task not in x.tasks
+
     def test_unschedule_all(self):
-        pass
+
+        x = Watcher()
+        task_a = x.schedule(1, '.')
+        task_b = x.schedule(1, '.')
+        x.start()
+
+        x.unschedule_all()
+        assert task_a not in x.tasks
+        assert task_b not in x.tasks
 
     #
 
@@ -1070,6 +1105,10 @@ class TestWatcher:
 class TestSimpleWatcher:
     """A SimpleWatcher"""
 
+    def test_repr(self):
+        assert repr(SimpleWatcher(10, '.', lambda x: x)) == \
+            "<SimpleWatcher: is_active=False>"
+
     def test_callable(self):
         """Should run a callable when a file system changed."""
 
@@ -1078,7 +1117,7 @@ class TestSimpleWatcher:
             nonlocal i
             i = i + a + b
 
-        x = SimpleDirectoryWatcher(CHECK_INTERVAL, '.', function, [1], {'b': 1})
+        x = SimpleWatcher(CHECK_INTERVAL, '.', function, [1], {'b': 1})
         create_file('new.file')
         x.loop()
         assert i == 2
@@ -1091,7 +1130,7 @@ class TestSimpleWatcher:
             # be dead, because stop() is run by the check thread!
             x.stop()
 
-        x = SimpleDirectoryWatcher(CHECK_INTERVAL, '.', function)
+        x = SimpleWatcher(CHECK_INTERVAL, '.', function)
         x.args = (x,)
         create_file('new.file')
         x.start()
@@ -1106,7 +1145,7 @@ class TestSimpleWatcher:
             x.stop()
             time.sleep(2)
 
-        x = SimpleDirectoryWatcher(CHECK_INTERVAL, '.', function)
+        x = SimpleWatcher(CHECK_INTERVAL, '.', function)
         x.args = (x,)
         x.start()
         create_file('new.file')
@@ -1120,39 +1159,40 @@ class TestSimpleWatcher:
 
 # Benchmark
 
-def benchmark(times=1000):
-    """Benchmarks each watcher."""
+# TODO: benchmark
+# def benchmark(times=1000):
+#     """Benchmarks each watcher."""
+#
+#     # Prepare temp directory with example files.
+#     cwd = os.getcwd()
+#     path = create_test_files()
+#     os.chdir(path)
+#
+#     msg = 'Watching {} files in {} directories.'.format(8 * times, 2 * times)
+#     print(msg)
+#
+#     x = timeit.timeit('DirectoryWatcher(1, ".", recursive=True).check()',
+#                       setup='from watchers import DirectoryWatcher', number=times)
+#
+#     sample = round(x / (8 * times) * 1000, 3)
+#
+#     print('DirectoryWatcher: \t{} s. one file: {} ms.'.format(round(x, 3), sample))
+#
+#     x = timeit.timeit(
+#         'SimpleWatcher(1, ".", target=lambda: 1, recursive=True).check()',
+#         setup='from watchers import SimpleWatcher', number=times)
+#
+#     sample = round(x / (8 * times) * 1000, 3)
+#     print('SimpleWatcher: \t{} s. one file: {} ms.'.format(round(x, 3), sample))
+#
+#     # Cleaning!
+#     shutil.rmtree(path)
+#     os.chdir(cwd)
 
-    # Prepare temp directory with example files.
-    cwd = os.getcwd()
-    path = create_test_files()
-    os.chdir(path)
-
-    msg = 'Watching {} files in {} directories.'.format(8 * times, 2 * times)
-    print(msg)
-
-    x = timeit.timeit('DirectoryWatcher(1, ".", recursive=True).check()',
-                      setup='from watchers import DirectoryWatcher', number=times)
-
-    sample = round(x / (8 * times) * 1000, 3)
-
-    print('DirectoryWatcher: \t{} s. one file: {} ms.'.format(round(x, 3), sample))
-
-    x = timeit.timeit(
-        'SimpleWatcher(1, ".", target=lambda: 1, recursive=True).check()',
-        setup='from watchers import SimpleWatcher', number=times)
-
-    sample = round(x / (8 * times) * 1000, 3)
-    print('SimpleWatcher: \t{} s. one file: {} ms.'.format(round(x, 3), sample))
-
-    # Cleaning!
-    shutil.rmtree(path)
-    os.chdir(cwd)
-
-
-if __name__ == "__main__":
-
-    if '-b' in sys.argv or '--benchmark' in sys.argv:
-        benchmark()
-    else:
-        unittest.main()
+#
+# if __name__ == "__main__":
+#
+#     if '-b' in sys.argv or '--benchmark' in sys.argv:
+#         benchmark()
+#     else:
+#         unittest.main()
