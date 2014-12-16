@@ -29,7 +29,7 @@ def log(event):
     print(event)
 
 x = Watcher(callback=log)
-x.schedule(2, 'path/to/file')
+x.schedule(2, 'path/to/directory')
 x.start()
 ```
 
